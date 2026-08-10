@@ -4,6 +4,10 @@ A **modular monolith** ride-hailing platform: one Spring Boot application, eight
 independently-owned MySQL schemas, Redis for live driver geography and hot-path
 coordination.
 
+> **Want to run a ride end to end?** See **[WORKFLOW.md](WORKFLOW.md)** — driver
+> login, rider login, booking, the bill explained line by line, start, in
+> progress, complete, plus the audit trail and every alternate flow.
+
 > **Reading this as an AI agent picking up the work?** Read
 > [Section 15 — Rules for future changes](#15-rules-for-future-changes) first,
 > then [Section 3 — Module map](#3-module-map) and
