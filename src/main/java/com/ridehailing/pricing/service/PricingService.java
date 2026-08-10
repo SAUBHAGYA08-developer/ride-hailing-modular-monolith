@@ -12,8 +12,12 @@ import com.ridehailing.pricing.api.FareQuote;
 import com.ridehailing.pricing.entity.PricingCarTypeMultiplier;
 import com.ridehailing.pricing.entity.PricingDistanceTier;
 import com.ridehailing.pricing.entity.PricingRule;
+import com.ridehailing.common.geo.GeoUtils;
+import com.ridehailing.pricing.entity.PricingZone;
 import com.ridehailing.pricing.repository.PricingRuleRepository;
+import com.ridehailing.pricing.repository.PricingZoneRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -25,6 +29,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * The single place a fare is computed.
@@ -33,6 +38,7 @@ import java.util.Map;
  * from pricing_schema or from business configuration. The only literal here is
  * the multiplicative identity used when a factor is absent or switched off.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class PricingService {
@@ -46,11 +52,17 @@ public class PricingService {
     private static final BigDecimal NO_ADJUSTMENT = new BigDecimal("1.00");
 
     private final PricingRuleRepository pricingRuleRepository;
+    private final PricingZoneRepository pricingZoneRepository;
     private final ConfigurationService configurationService;
     private final CouponService couponService;
 
     @Transactional(readOnly = true)
-    public FareQuote quote(BigDecimal distanceKm, CarType requestedCarType, String couponCode, Long userId) {
+    public FareQuote quote(BigDecimal pickupLatitude,
+                           BigDecimal pickupLongitude,
+                           BigDecimal distanceKm,
+                           CarType requestedCarType,
+                           String couponCode,
+                           Long userId) {
         if (distanceKm == null || distanceKm.signum() < 0) {
             throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Distance in kilometres must be zero or greater");
         }
@@ -58,7 +70,9 @@ public class PricingService {
             throw new BusinessException(ErrorCode.VALIDATION_ERROR, "A car type is required to quote a fare");
         }
 
-        PricingRule rule = activeRule();
+        PricingZone zone = resolveZone(pickupLatitude, pickupLongitude).orElse(null);
+        String zoneCode = zone == null ? null : zone.getCode();
+        PricingRule rule = ruleFor(zone);
 
         List<Map<String, Object>> tierLines = new ArrayList<>();
         BigDecimal distanceFare = distanceFare(rule, distanceKm, tierLines);
@@ -90,25 +104,65 @@ public class PricingService {
         }
         BigDecimal totalFare = Money.nonNegative(fareBeforeDiscount.subtract(discountAmount));
 
-        Map<String, Object> breakdown = breakdown(rule, distanceKm, tierLines, distanceFare, carTypeMultiplier,
+        Map<String, Object> breakdown = breakdown(rule, zone, distanceKm, tierLines, distanceFare, carTypeMultiplier,
                 requestedCarType, surgeEnabled, surgeMultiplier, minimumFare, minimumFareApplied, fareBeforeDiscount,
                 appliedCouponCode, discountAmount, totalFare);
 
-        return new FareQuote(rule.getCode(), distanceKm, distanceFare, carTypeMultiplier, surgeMultiplier,
+        return new FareQuote(rule.getCode(), zoneCode, distanceKm, distanceFare, carTypeMultiplier, surgeMultiplier,
                 minimumFare, minimumFareApplied, fareBeforeDiscount, appliedCouponCode, couponId,
                 discountAmount, totalFare, breakdown);
     }
 
+    /**
+     * Finds the zone containing the pickup. Zones arrive ordered by priority
+     * then by radius, so the first hit is the most specific one and a small
+     * zone nested inside a city wins without any extra comparison.
+     */
+    private Optional<PricingZone> resolveZone(BigDecimal latitude, BigDecimal longitude) {
+        if (!GeoUtils.isValidLatitude(latitude) || !GeoUtils.isValidLongitude(longitude)) {
+            return Optional.empty();
+        }
+        for (PricingZone zone : pricingZoneRepository.findActiveWithRules()) {
+            BigDecimal distance = GeoUtils.distanceKm(zone.getCentreLatitude(), zone.getCentreLongitude(),
+                    latitude, longitude);
+            if (distance.compareTo(zone.getRadiusKm()) <= 0) {
+                return Optional.of(zone);
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * A zone's rule wins; a pickup outside every zone falls back to the global
+     * default. A zone pointing at a deactivated rule also falls back rather
+     * than failing the booking: losing a ride is worse than pricing it at the
+     * platform default, and the warning makes the misconfiguration visible.
+     */
+    private PricingRule ruleFor(PricingZone zone) {
+        if (zone != null) {
+            PricingRule zoneRule = loadRule(zone.getPricingRule().getCode());
+            if (zoneRule.isActive()) {
+                return zoneRule;
+            }
+            log.warn("Pricing zone {} points at inactive rule {} - falling back to the global default",
+                    zone.getCode(), zoneRule.getCode());
+        }
+        return activeRule();
+    }
+
     private PricingRule activeRule() {
-        String ruleCode = configurationService.getString(ConfigKeys.PRICING_ACTIVE_RULE);
-        PricingRule rule = pricingRuleRepository.findByCode(ruleCode)
-                .orElseThrow(() -> new BusinessException(ErrorCode.PRICING_RULE_NOT_FOUND,
-                        "Pricing rule " + ruleCode + " does not exist"));
+        PricingRule rule = loadRule(configurationService.getString(ConfigKeys.PRICING_ACTIVE_RULE));
         if (!rule.isActive()) {
             throw new BusinessException(ErrorCode.PRICING_RULE_NOT_FOUND,
-                    "Pricing rule " + ruleCode + " is not active");
+                    "Pricing rule " + rule.getCode() + " is not active");
         }
         return rule;
+    }
+
+    private PricingRule loadRule(String ruleCode) {
+        return pricingRuleRepository.findByCode(ruleCode)
+                .orElseThrow(() -> new BusinessException(ErrorCode.PRICING_RULE_NOT_FOUND,
+                        "Pricing rule " + ruleCode + " does not exist"));
     }
 
     /**
@@ -158,6 +212,7 @@ public class PricingService {
      * every input the fare was derived from and only JSON native values.
      */
     private Map<String, Object> breakdown(PricingRule rule,
+                                          PricingZone zone,
                                           BigDecimal distanceKm,
                                           List<Map<String, Object>> tierLines,
                                           BigDecimal distanceFare,
@@ -174,6 +229,8 @@ public class PricingService {
         Map<String, Object> breakdown = new LinkedHashMap<>();
         breakdown.put("pricingRuleCode", rule.getCode());
         breakdown.put("pricingRuleName", rule.getName());
+        breakdown.put("pricingZoneCode", zone == null ? null : zone.getCode());
+        breakdown.put("pricingZoneName", zone == null ? null : zone.getName());
         breakdown.put("distanceKm", distanceKm);
         breakdown.put("tiers", List.copyOf(tierLines));
         breakdown.put("distanceFare", distanceFare);

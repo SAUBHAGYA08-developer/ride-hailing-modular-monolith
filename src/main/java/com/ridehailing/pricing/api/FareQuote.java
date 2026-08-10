@@ -12,6 +12,7 @@ import java.util.Map;
  */
 public record FareQuote(
         String pricingRuleCode,
+        String pricingZoneCode,
         BigDecimal distanceKm,
         BigDecimal distanceFare,
         BigDecimal carTypeMultiplier,

@@ -26,7 +26,7 @@ public class RideMapper {
             }
         }
 
-        FareSummary fare = new FareSummary(ride.getPricingRuleCode(), ride.getDistanceFare(),
+        FareSummary fare = new FareSummary(ride.getPricingRuleCode(), ride.getPricingZoneCode(), ride.getDistanceFare(),
                 ride.getCarTypeMultiplier(), ride.getSurgeMultiplier(), ride.getMinimumFare(),
                 ride.isMinimumFareApplied(), ride.getFareBeforeDiscount(), ride.getCouponCode(),
                 ride.getDiscountAmount(), ride.getTotalFare());

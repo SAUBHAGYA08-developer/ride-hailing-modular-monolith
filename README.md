@@ -298,6 +298,7 @@ is append-only, so a version column and an "updated by" would be meaningless.
 | `pricing_schema` | `pricing_rules` | unique `code` |
 | | `pricing_distance_tiers` | unique `(pricing_rule_id, from_km)`, CHECK `to_km > from_km` |
 | | `pricing_car_type_multipliers` | unique `(pricing_rule_id, car_type)` |
+| | `pricing_zones` | unique `code`, index `(active, priority)`, FK to `pricing_rules`, CHECKs on lat/lng/radius |
 | `coupon_schema` | `coupons` | unique `code`, CHECKs on type/status/values |
 | | `coupon_redemptions` | **unique `ride_id`** — a ride can consume at most one coupon, ever |
 | `audit_schema` | `audit_logs` | index `(entity_type, entity_id, changed_at)` and `(request_id)` |
@@ -325,6 +326,7 @@ lookup by entity or by request). There are no speculative indexes.
 | `V12__seed_configuration_master_data.sql` | all business settings |
 | `V13__seed_coupon_master_data.sql` | WELCOME10, FLAT50, FIRST100 |
 | `V14__seed_demo_users_drivers_vehicles.sql` | demo users, drivers, vehicles |
+| `V15__add_city_pricing_zones.sql` | `pricing_zones` table, `rides.pricing_zone_code`, Delhi/Pune rules + 3 city zones |
 
 Required data is created by migrations, never by application startup code. The one
 startup component that exists (`DriverLocationWarmupRunner`) only republishes
@@ -627,6 +629,51 @@ Every ride stores its own `distance_fare`, `car_type_multiplier`, `surge_multipl
 `pricing_rule_code` and the full JSON `fare_breakdown`. **Changing a pricing rule
 never changes the fare of a historical ride.**
 
+### City based pricing (zones)
+
+Fares depend on **where the ride starts**. A zone is a circle — centre, radius,
+priority — that maps a pickup point to a pricing rule:
+
+| Zone | Centre | Radius | Rule | Min fare | ₹/km tiers |
+|---|---|---|---|---|---|
+| `DELHI` | 28.6139, 77.2090 | 50 km | `DELHI_STANDARD` | ₹60 | 12 / 9 / 6 |
+| `PUNE` | 18.5204, 73.8567 | 30 km | `PUNE_STANDARD` | ₹45 | 9 / 7 / 5 |
+| `BANGALORE` | 12.9716, 77.5946 | 40 km | `STANDARD` | ₹50 | 10 / 8 / 5 |
+
+A pickup outside every zone falls back to the global `pricing.active.rule`.
+
+Design decisions worth keeping:
+
+* **The pickup decides the zone, never the drop.** The pickup is fixed for the
+  whole life of a ride, so the fare cannot shift under the rider mid-trip.
+* **A circle, not a polygon.** No `GEOMETRY` column, no spatial index, no PostGIS
+  equivalent to maintain — and city-level pricing does not need street-accurate
+  borders. Swap in polygons only when a real boundary dispute demands it.
+* **Priority resolves overlaps.** A small airport zone at priority 200 nested
+  inside a city zone at 100 wins automatically. Zones are returned ordered by
+  priority then ascending radius, so the first containing zone is the most
+  specific one — no extra comparison, no Java change to add one.
+* **Every active zone is scanned in memory per quote.** One row per city makes
+  this cheaper than a spatial query. Revisit if zones ever reach the hundreds.
+* **A zone pointing at a deactivated rule falls back to the global default** with
+  a warning, rather than failing the booking. Losing a ride is worse than pricing
+  it at the platform default; the log makes the misconfiguration visible.
+* **`rides.pricing_zone_code` is part of the snapshot.** Redraw or delete a zone
+  later — historical fares stay exactly as charged.
+
+Adding a city is one API call, no deployment:
+
+```bash
+POST /api/v1/pricing/zones
+{"code":"MUMBAI","name":"Mumbai","pricingRuleCode":"MUMBAI_STANDARD",
+ "centreLatitude":19.0760,"centreLongitude":72.8777,
+ "radiusKm":45,"priority":100,"active":true}
+```
+
+**Operational note:** to book in a city you also need a driver there. The Redis
+GEO search runs *before* pricing, so a pickup with no nearby driver returns
+`NO_DRIVER_IN_RADIUS` and the zone's rates are never reached.
+
 ### Car-type upgrade
 
 Requested HATCHBACK with no hatchback available → a SEDAN is assigned.
@@ -785,10 +832,29 @@ All paths are prefixed `/api/v1`. All responses use the envelope above.
 | GET | `/pricing/rules` | `PRICING_READ` | | |
 | POST | `/pricing/rules` | `PRICING_CREATE` | ADMIN | |
 | PUT | `/pricing/rules/{id}` | `PRICING_UPDATE` | ADMIN | never affects existing rides |
+| GET | `/pricing/zones` | `PRICING_READ` | ADMIN | city → pricing rule mapping |
+| POST | `/pricing/zones` | `PRICING_CREATE` | ADMIN | add a city in one call |
+| PUT | `/pricing/zones/{id}` | `PRICING_UPDATE` | ADMIN | redrawing never affects existing rides |
 | GET | `/configurations` | `CONFIGURATION_READ` | ADMIN | |
 | GET | `/configurations/{key}` | `CONFIGURATION_READ` | ADMIN | |
 | PUT | `/configurations/{key}` | `CONFIGURATION_UPDATE` | ADMIN | evicts the Redis cache |
 | GET | `/admin/audit-logs` | `AUDIT_READ` | ADMIN | filter by entity or `requestId` |
+
+### Postman collection
+
+`postman_collection.json` in the repo root — import it into Postman (**Import →
+File**). 46 requests in 9 folders, covering every endpoint plus the failure
+cases (403 ownership, 409 invalid transition, 422 idempotency reuse, 429 rate
+limit).
+
+* Set the `baseUrl` collection variable if the app is not on port 8080.
+* Run **0. Auth** first: each login stores its JWT in `riderToken` /
+  `driverToken` / `adminToken` automatically, and every other request already
+  references the right one.
+* Run **2. Drivers → Update driver location** before booking — see the TTL
+  gotcha in §16.
+* **Book a ride** stores the new id in `rideId`, so the start/complete/cancel
+  requests work with no copy-pasting.
 
 ### Example: book a ride
 

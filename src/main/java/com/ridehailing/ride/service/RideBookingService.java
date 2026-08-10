@@ -140,7 +140,8 @@ public class RideBookingService {
 
         // Priced before the transaction opens: it reads several tables and must
         // not lengthen the driver reservation.
-        FareQuote quote = pricingService.quote(distanceKm, request.carType(), request.couponCode(), userId);
+        FareQuote quote = pricingService.quote(request.pickupLatitude(), request.pickupLongitude(),
+                distanceKm, request.carType(), request.couponCode(), userId);
 
         Ride ride = rideCreationService.reserveAndCreate(userId, request, distanceKm, quote, ranked);
 

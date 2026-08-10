@@ -22,6 +22,9 @@ spring:
     open-in-view: false
     hibernate:
       # Flyway is the single source of truth for schema. Hibernate never touches DDL.
+      # Do not set this to update: Hibernate cannot create the module schemas
+      # (it never issues CREATE DATABASE), and silently adding columns no
+      # migration knows about drifts this database away from every other one.
       ddl-auto: none
     properties:
       hibernate:

@@ -74,6 +74,7 @@ public class RideCreationService {
         ride.setDistanceKm(distanceKm);
 
         ride.setPricingRuleCode(quote.pricingRuleCode());
+        ride.setPricingZoneCode(quote.pricingZoneCode());
         ride.setDistanceFare(quote.distanceFare());
         ride.setCarTypeMultiplier(quote.carTypeMultiplier());
         ride.setSurgeMultiplier(quote.surgeMultiplier());

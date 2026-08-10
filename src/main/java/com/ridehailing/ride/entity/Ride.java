@@ -82,6 +82,9 @@ public class Ride extends BaseEntity {
     @Column(name = "pricing_rule_code", nullable = false, length = 40, updatable = false)
     private String pricingRuleCode;
 
+    @Column(name = "pricing_zone_code", length = 40)
+    private String pricingZoneCode;
+
     @Column(name = "distance_fare", nullable = false, precision = 10, scale = 2, updatable = false)
     private BigDecimal distanceFare;
 

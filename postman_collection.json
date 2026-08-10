@@ -1,0 +1,2428 @@
+{
+  "info": {
+    "name": "Ride Hailing Backend",
+    "_postman_id": "b7c1e9a4-3f52-4d18-9a6c-6d2f0b3e5a71",
+    "description": "Ride Hailing Backend - modular monolith (Spring Boot 3.5 / MySQL 8 / Redis).\n\n## Getting started\n1. Set the `baseUrl` variable if the app is not on port 8080.\n2. Run **0. Auth** -> the three login requests. Each stores its JWT in a collection\n   variable (`riderToken`, `driverToken`, `adminToken`) automatically.\n3. Run **2. Drivers -> Update driver location** at least once BEFORE booking.\n\n## Why the location ping matters\nA driver is only matchable while a *fresh* GPS position exists in Redis.\n`driver.location.ttl.seconds` is 60, so the positions loaded at application\nstartup expire after a minute and the driver is pruned from the GEO set.\nWithout a recent ping every booking returns `NO_DRIVER_IN_RADIUS`.\n\n## Demo credentials (development only)\n| Account | Password | Role |\n|---|---|---|\n| admin@ridehailing.com | Admin@123 | ADMIN |\n| rahul@ / priya@ / amit@ridehailing.com | User@123 | USER |\n| raj.kumar@ / amit.sharma@ / vikram.singh@ / neha.verma@ridehailing.com | Driver@123 | DRIVER |\n\n## City based pricing\nFares depend on the PICKUP location. Seeded zones: DELHI, PUNE, BANGALORE - each mapped to its\nown pricing rule. See folder **6. Pricing** for zone management and **9. City pricing demo**\nfor an end to end proof.\n\nEvery response uses the envelope `{ success, data | error, requestId, timestamp }`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080/api/v1",
+      "description": "Change the port here if 8080 is taken."
+    },
+    {
+      "key": "riderToken",
+      "value": ""
+    },
+    {
+      "key": "riderTokenUserId",
+      "value": ""
+    },
+    {
+      "key": "driverToken",
+      "value": ""
+    },
+    {
+      "key": "driverTokenUserId",
+      "value": ""
+    },
+    {
+      "key": "adminToken",
+      "value": ""
+    },
+    {
+      "key": "adminTokenUserId",
+      "value": ""
+    },
+    {
+      "key": "driverId",
+      "value": "1",
+      "description": "Raj Kumar (SEDAN, KA01AB1234)"
+    },
+    {
+      "key": "rideId",
+      "value": "",
+      "description": "Set automatically by 'Book a ride'."
+    },
+    {
+      "key": "idempotencyKey",
+      "value": "demo-key-001",
+      "description": "Reuse the same value to exercise replay."
+    },
+    {
+      "key": "couponCode",
+      "value": "WELCOME10"
+    },
+    {
+      "key": "couponId",
+      "value": ""
+    },
+    {
+      "key": "pricingRuleId",
+      "value": "1"
+    },
+    {
+      "key": "zoneId",
+      "value": "",
+      "description": "Set by 'Create pricing zone'."
+    },
+    {
+      "key": "delhiDriverId",
+      "value": "",
+      "description": "Set by 'Register Delhi driver'."
+    },
+    {
+      "key": "delhiDriverToken",
+      "value": "",
+      "description": "Set by 'Login Delhi driver'."
+    }
+  ],
+  "item": [
+    {
+      "name": "0. Auth",
+      "description": "Run these first. Tokens are captured automatically.",
+      "item": [
+        {
+          "name": "Login - rider (rahul)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Rate limited to 5 requests/minute per IP.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"rahul@ridehailing.com\",\n  \"password\": \"User@123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.success) {",
+                  "    pm.collectionVariables.set('riderToken', res.data.accessToken);",
+                  "    pm.collectionVariables.set('riderTokenUserId', res.data.userId);",
+                  "    console.log('riderToken stored for ' + res.data.email + ' (' + res.data.role + ')');",
+                  "} else {",
+                  "    console.error('Login failed:', res.error);",
+                  "}",
+                  "pm.test('login succeeded', () => pm.expect(res.success).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login - driver (Raj Kumar)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Driver for driverId 1, SEDAN KA01AB1234.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"raj.kumar@ridehailing.com\",\n  \"password\": \"Driver@123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.success) {",
+                  "    pm.collectionVariables.set('driverToken', res.data.accessToken);",
+                  "    pm.collectionVariables.set('driverTokenUserId', res.data.userId);",
+                  "    console.log('driverToken stored for ' + res.data.email + ' (' + res.data.role + ')');",
+                  "} else {",
+                  "    console.error('Login failed:', res.error);",
+                  "}",
+                  "pm.test('login succeeded', () => pm.expect(res.success).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login - admin",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Holds every permission.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@ridehailing.com\",\n  \"password\": \"Admin@123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.success) {",
+                  "    pm.collectionVariables.set('adminToken', res.data.accessToken);",
+                  "    pm.collectionVariables.set('adminTokenUserId', res.data.userId);",
+                  "    console.log('adminToken stored for ' + res.data.email + ' (' + res.data.role + ')');",
+                  "} else {",
+                  "    console.error('Login failed:', res.error);",
+                  "}",
+                  "pm.test('login succeeded', () => pm.expect(res.success).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login - wrong password (401)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Unknown email and wrong password return the same INVALID_CREDENTIALS, so the endpoint cannot be used to enumerate accounts.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"rahul@ridehailing.com\",\n  \"password\": \"wrong\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. Users",
+      "item": [
+        {
+          "name": "Create user (public signup)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            },
+            "description": "Public. The USER role is fixed by the server - a caller cannot request ADMIN.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Test Rider\",\n  \"email\": \"test.rider@example.com\",\n  \"password\": \"Test@1234\",\n  \"phone\": \"+919812345678\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Get user by id",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{riderToken}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{riderTokenUserId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{riderTokenUserId}}"
+              ]
+            },
+            "description": "Requires USER_READ. A non-admin may only read their own account (ownership check)."
+          }
+        },
+        {
+          "name": "List users (admin only)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/users?role=USER&page=0&size=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "role",
+                  "value": "USER"
+                },
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Requires USER_READ and the ADMIN role."
+          }
+        },
+        {
+          "name": "Get another user's account (403)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{riderToken}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/users/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "1"
+              ]
+            },
+            "description": "Demonstrates ownership enforcement: the permission allows reading users, the guard restricts it to your own."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Drivers",
+      "item": [
+        {
+          "name": "Register driver (public)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/drivers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "drivers"
+              ]
+            },
+            "description": "Creates the login account and the driver profile in one transaction. Status starts OFFLINE.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Test Driver\",\n  \"email\": \"test.driver@example.com\",\n  \"password\": \"Test@1234\",\n  \"phone\": \"+919812345679\",\n  \"licenseNumber\": \"KA-DL-2024-9999\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Get driver by id",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{driverToken}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/drivers/{{driverId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "drivers",
+                "{{driverId}}"
+              ]
+            },
+            "description": "Requires DRIVER_READ plus ownership (or ADMIN)."
+          }
+        },
+        {
+          "name": "Update driver location (REQUIRED before booking)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{driverToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/drivers/{{driverId}}/location",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "drivers",
+                "{{driverId}}",
+                "location"
+              ]
+            },
+            "description": "Writes to Redis GEO only - never to MySQL on a GPS ping.\n\nRate limited to 60/minute. Returns 204.\n\nRun this before any booking: the freshness marker expires after driver.location.ttl.seconds (60), after which the driver is pruned from the GEO set.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"latitude\": 12.975,\n  \"longitude\": 77.599\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update driver location - other driver (403)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{driverToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/drivers/2/location",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "drivers",
+                "2",
+                "location"
+              ]
+            },
+            "description": "The path driverId is verified against the JWT identity, so a driver cannot move another driver.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"latitude\": 12.982,\n  \"longitude\": 77.605\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Set driver AVAILABLE",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{driverToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/drivers/{{driverId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "drivers",
+                "{{driverId}}",
+                "status"
+              ]
+            },
+            "description": "Only OFFLINE <-> AVAILABLE. BUSY is owned by ride reservation.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"AVAILABLE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Set driver OFFLINE",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{driverToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/drivers/{{driverId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "drivers",
+                "{{driverId}}",
+                "status"
+              ]
+            },
+            "description": "Also removes the driver's Redis location.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"OFFLINE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Set driver BUSY (409)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{driverToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/drivers/{{driverId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "drivers",
+                "{{driverId}}",
+                "status"
+              ]
+            },
+            "description": "Rejected with DRIVER_HAS_ACTIVE_RIDE: BUSY is set only by ride assignment.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"BUSY\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Vehicles",
+      "item": [
+        {
+          "name": "Register vehicle",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{driverToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/drivers/{{driverId}}/vehicles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "drivers",
+                "{{driverId}}",
+                "vehicles"
+              ]
+            },
+            "description": "A driver has at most one active vehicle: registering a new one deactivates the previous, in one transaction.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"carType\": \"SEDAN\",\n  \"registrationNumber\": \"KA01ZZ9999\",\n  \"make\": \"Honda\",\n  \"model\": \"City\",\n  \"color\": \"White\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List driver vehicles",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{driverToken}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/drivers/{{driverId}}/vehicles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "drivers",
+                "{{driverId}}",
+                "vehicles"
+              ]
+            },
+            "description": "Requires VEHICLE_READ plus ownership."
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Rides",
+      "description": "Run '2. Drivers -> Update driver location' first.",
+      "item": [
+        {
+          "name": "Book a ride",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{riderToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotencyKey}}",
+                "description": "Optional but recommended. Repeating a key replays the original ride."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/rides",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rides"
+              ]
+            },
+            "description": "Rate limited to 10/minute per rider. The rider is taken from the JWT - the body has no userId.\n\nFlow: rate limit -> idempotency -> validation -> config -> Redis GEO search ->\nmatching strategy -> atomic driver reservation in MySQL -> ride + pricing snapshot -> audit.\n\n9.1 km hatchback on the seeded rule = 2x10 + 3x8 + 4.102x5 = 64.51, x0.9 = 58.06.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pickupLatitude\": 12.9716,\n  \"pickupLongitude\": 77.5946,\n  \"pickupAddress\": \"MG Road\",\n  \"dropLatitude\": 12.9081,\n  \"dropLongitude\": 77.6476,\n  \"dropAddress\": \"HSR Layout\",\n  \"carType\": \"HATCHBACK\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.success) {",
+                  "    pm.collectionVariables.set('rideId', res.data.id);",
+                  "    console.log('ride ' + res.data.id + ' -> ' + res.data.status +",
+                  "        ' | driver: ' + (res.data.driver ? res.data.driver.fullName : 'none') +",
+                  "        ' | ' + res.data.requestedCarType + ' -> ' + res.data.assignedCarType +",
+                  "        (res.data.carTypeUpgraded ? ' (UPGRADED, no extra charge)' : '') +",
+                  "        ' | fare ' + res.data.fare.totalFare);",
+                  "} else {",
+                  "    console.warn(res.error.code + ': ' + res.error.message);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Book again with the SAME Idempotency-Key",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{riderToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotencyKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/rides",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rides"
+              ]
+            },
+            "description": "Returns the original ride. No second ride is created. Guaranteed by the unique key (user_id, idempotency_key).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pickupLatitude\": 12.9716,\n  \"pickupLongitude\": 77.5946,\n  \"pickupAddress\": \"MG Road\",\n  \"dropLatitude\": 12.9081,\n  \"dropLongitude\": 77.6476,\n  \"dropAddress\": \"HSR Layout\",\n  \"carType\": \"HATCHBACK\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('same ride replayed', () => pm.expect(String(res.data.id)).to.eql(pm.collectionVariables.get('rideId')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Same key, different body (422)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{riderToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotencyKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/rides",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rides"
+              ]
+            },
+            "description": "IDEMPOTENCY_KEY_REUSED - the stored SHA-256 request fingerprint does not match.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pickupLatitude\": 12.9716,\n  \"pickupLongitude\": 77.5946,\n  \"dropLatitude\": 12.9,\n  \"dropLongitude\": 77.6,\n  \"carType\": \"SEDAN\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Book with a coupon",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{riderToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/rides",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rides"
+              ]
+            },
+            "description": "WELCOME10 needs a fare of at least 100, so a short trip returns COUPON_NOT_APPLICABLE. Try a longer drop point.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pickupLatitude\": 12.9716,\n  \"pickupLongitude\": 77.5946,\n  \"pickupAddress\": \"MG Road\",\n  \"dropLatitude\": 12.9081,\n  \"dropLongitude\": 77.6476,\n  \"dropAddress\": \"HSR Layout\",\n  \"carType\": \"HATCHBACK\",\n  \"couponCode\": \"{{couponCode}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.success) {",
+                  "    pm.collectionVariables.set('rideId', res.data.id);",
+                  "    console.log('ride ' + res.data.id + ' -> ' + res.data.status +",
+                  "        ' | driver: ' + (res.data.driver ? res.data.driver.fullName : 'none') +",
+                  "        ' | ' + res.data.requestedCarType + ' -> ' + res.data.assignedCarType +",
+                  "        (res.data.carTypeUpgraded ? ' (UPGRADED, no extra charge)' : '') +",
+                  "        ' | fare ' + res.data.fare.totalFare);",
+                  "} else {",
+                  "    console.warn(res.error.code + ': ' + res.error.message);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Book far from any driver (404)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{riderToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/rides",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rides"
+              ]
+            },
+            "description": "NO_DRIVER_IN_RADIUS - outside ride.search.radius.km.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pickupLatitude\": 13.5,\n  \"pickupLongitude\": 78.5,\n  \"dropLatitude\": 13.6,\n  \"dropLongitude\": 78.6,\n  \"carType\": \"SEDAN\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Get ride by id",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{riderToken}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/rides/{{rideId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rides",
+                "{{rideId}}"
+              ]
+            },
+            "description": "Readable by the rider, the assigned driver, or an ADMIN. Anyone else gets ACCESS_DENIED."
+          }
+        },
+        {
+          "name": "Start ride (driver)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{driverToken}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/rides/{{rideId}}/start",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rides",
+                "{{rideId}}",
+                "start"
+              ]
+            },
+            "description": "DRIVER_ASSIGNED -> STARTED. Only the assigned driver or an ADMIN."
+          }
+        },
+        {
+          "name": "Start ride as rider (403)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{riderToken}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/rides/{{rideId}}/start",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rides",
+                "{{rideId}}",
+                "start"
+              ]
+            },
+            "description": "ACCESS_DENIED - the rider is not the assigned driver."
+          }
+        },
+        {
+          "name": "Complete ride (driver)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{driverToken}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/rides/{{rideId}}/complete",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rides",
+                "{{rideId}}",
+                "complete"
+              ]
+            },
+            "description": "STARTED -> COMPLETED. Frees the driver and increments total_rides in one atomic statement."
+          }
+        },
+        {
+          "name": "Cancel ride",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{riderToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/rides/{{rideId}}/cancel",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rides",
+                "{{rideId}}",
+                "cancel"
+              ]
+            },
+            "description": "Legal only from REQUESTED or DRIVER_ASSIGNED. Releases the driver and reverses any coupon redemption. cancelled_by comes from the authenticated role, never the body.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Changed my plans\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Invalid transition (409)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{driverToken}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/rides/{{rideId}}/start",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rides",
+                "{{rideId}}",
+                "start"
+              ]
+            },
+            "description": "INVALID_RIDE_STATE_TRANSITION once the ride is already STARTED, COMPLETED or CANCELLED."
+          }
+        },
+        {
+          "name": "My rides",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{riderToken}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{riderTokenUserId}}/rides?page=0&size=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{riderTokenUserId}}",
+                "rides"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Newest first. A rider sees only their own; ADMIN sees any."
+          }
+        },
+        {
+          "name": "Driver rides",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{driverToken}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/drivers/{{driverId}}/rides?page=0&size=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "drivers",
+                "{{driverId}}",
+                "rides"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Newest first, ownership enforced."
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Coupons",
+      "item": [
+        {
+          "name": "Create coupon (admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/coupons",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "coupons"
+              ]
+            },
+            "description": "discountType is PERCENTAGE or FLAT. maxDiscountAmount is only valid for PERCENTAGE.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"DEMO25\",\n  \"description\": \"25% off up to 150\",\n  \"discountType\": \"PERCENTAGE\",\n  \"discountValue\": 25,\n  \"maxDiscountAmount\": 150,\n  \"minRideAmount\": 100,\n  \"usageLimit\": 100,\n  \"perUserLimit\": 2\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.success) { pm.collectionVariables.set('couponId', res.data.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validate coupon",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{riderToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/coupons/{{couponCode}}/validate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "coupons",
+                "{{couponCode}}",
+                "validate"
+              ]
+            },
+            "description": "Rate limited to 20/minute. The user is taken from the JWT, never the body.\n\nNever throws for an inapplicable coupon - returns valid=false with a reason.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fareAmount\": 250.0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Validate coupon below minimum",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{riderToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/coupons/WELCOME10/validate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "coupons",
+                "WELCOME10",
+                "validate"
+              ]
+            },
+            "description": "valid=false, reason COUPON_NOT_APPLICABLE - WELCOME10 needs a fare of at least 100.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fareAmount\": 50.0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Deactivate coupon (admin)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/coupons/{{couponId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "coupons",
+                "{{couponId}}"
+              ]
+            },
+            "description": "Soft delete: status becomes INACTIVE. A coupon is never physically removed - redemptions reference it. Returns 204."
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Pricing",
+      "item": [
+        {
+          "name": "List pricing rules",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/pricing/rules",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pricing",
+                "rules"
+              ]
+            },
+            "description": "The seeded STANDARD rule: minimum fare 50; 0-2 km @10, 2-5 km @8, 5+ km @5; SEDAN 1.0, HATCHBACK 0.9."
+          }
+        },
+        {
+          "name": "Create pricing rule (admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/pricing/rules",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pricing",
+                "rules"
+              ]
+            },
+            "description": "Tiers must start at 0, be contiguous and non-overlapping; at most one open-ended tier (toKm null) and it must be last.\n\nActivate it by setting pricing.active.rule to NIGHT in Configuration.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"NIGHT\",\n  \"name\": \"Night Pricing\",\n  \"minimumFare\": 80,\n  \"surgeMultiplier\": 1.5,\n  \"active\": false,\n  \"tiers\": [\n    {\n      \"fromKm\": 0,\n      \"toKm\": 3,\n      \"ratePerKm\": 12\n    },\n    {\n      \"fromKm\": 3,\n      \"toKm\": 8,\n      \"ratePerKm\": 10\n    },\n    {\n      \"fromKm\": 8,\n      \"toKm\": null,\n      \"ratePerKm\": 7\n    }\n  ],\n  \"carTypeMultipliers\": [\n    {\n      \"carType\": \"SEDAN\",\n      \"multiplier\": 1.0\n    },\n    {\n      \"carType\": \"HATCHBACK\",\n      \"multiplier\": 0.9\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Update pricing rule (admin)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/pricing/rules/{{pricingRuleId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pricing",
+                "rules",
+                "{{pricingRuleId}}"
+              ]
+            },
+            "description": "Changing a rule never alters the fare of an existing ride - every ride stores its own pricing snapshot.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"STANDARD\",\n  \"name\": \"Standard Pricing\",\n  \"minimumFare\": 50,\n  \"surgeMultiplier\": 1.0,\n  \"active\": true,\n  \"tiers\": [\n    {\n      \"fromKm\": 0,\n      \"toKm\": 2,\n      \"ratePerKm\": 10\n    },\n    {\n      \"fromKm\": 2,\n      \"toKm\": 5,\n      \"ratePerKm\": 8\n    },\n    {\n      \"fromKm\": 5,\n      \"toKm\": null,\n      \"ratePerKm\": 5\n    }\n  ],\n  \"carTypeMultipliers\": [\n    {\n      \"carType\": \"SEDAN\",\n      \"multiplier\": 1.0\n    },\n    {\n      \"carType\": \"HATCHBACK\",\n      \"multiplier\": 0.9\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List pricing zones",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/pricing/zones",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pricing",
+                "zones"
+              ]
+            },
+            "description": "A zone maps a PICKUP point to a pricing rule, so Delhi, Pune and Bengaluru charge different rates with no code change.\n\nSeeded: DELHI (50 km, DELHI_STANDARD), PUNE (30 km, PUNE_STANDARD), BANGALORE (40 km, STANDARD). Outside every zone the global pricing.active.rule applies."
+          }
+        },
+        {
+          "name": "Create pricing zone (Mumbai)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/pricing/zones",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pricing",
+                "zones"
+              ]
+            },
+            "description": "Adding a city is one API call. Create its pricing rule first via POST /pricing/rules if it needs its own rates.\n\npriority breaks overlaps: a small airport zone at priority 200 nested inside a city zone wins automatically.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"MUMBAI\",\n  \"name\": \"Mumbai\",\n  \"pricingRuleCode\": \"STANDARD\",\n  \"centreLatitude\": 19.076,\n  \"centreLongitude\": 72.8777,\n  \"radiusKm\": 45,\n  \"priority\": 100,\n  \"active\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.success) { pm.collectionVariables.set('zoneId', res.data.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update pricing zone",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/pricing/zones/{{zoneId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pricing",
+                "zones",
+                "{{zoneId}}"
+              ]
+            },
+            "description": "Redrawing a zone never changes a historical fare - each ride stored its own pricing snapshot and zone code.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"MUMBAI\",\n  \"name\": \"Mumbai Metropolitan\",\n  \"pricingRuleCode\": \"STANDARD\",\n  \"centreLatitude\": 19.076,\n  \"centreLongitude\": 72.8777,\n  \"radiusKm\": 60,\n  \"priority\": 100,\n  \"active\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. Configuration",
+      "item": [
+        {
+          "name": "List all configuration",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/configurations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "configurations"
+              ]
+            },
+            "description": "Business settings only. Infrastructure (datasource, Redis, JWT secret, port) is never DB driven."
+          }
+        },
+        {
+          "name": "Get one configuration key",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/configurations/ride.search.radius.km",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "configurations",
+                "ride.search.radius.km"
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Update search radius",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/configurations/ride.search.radius.km",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "configurations",
+                "ride.search.radius.km"
+              ]
+            },
+            "description": "Raise to 12 to bring Vikram Singh (5.2 km) and Neha Verma (10.5 km) into range. Evicts the Redis cache entry.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"value\": \"12\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Change matching strategy",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/configurations/matching.strategy",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "configurations",
+                "matching.strategy"
+              ]
+            },
+            "description": "Selects the DriverMatchingStrategy bean by name. An unknown value falls back to NEAREST with a warning.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"value\": \"NEAREST\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Raise driver location TTL",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/configurations/driver.location.ttl.seconds",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "configurations",
+                "driver.location.ttl.seconds"
+              ]
+            },
+            "description": "Keeps demo drivers matchable for 10 minutes instead of 60 seconds, at the cost of staler positions.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"value\": \"600\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Invalid value (400)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/configurations/ride.search.radius.km",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "configurations",
+                "ride.search.radius.km"
+              ]
+            },
+            "description": "CONFIGURATION_VALUE_INVALID - the value is validated against the row's value_type.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"value\": \"not-a-number\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "8. Admin / Audit",
+      "item": [
+        {
+          "name": "Audit logs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/audit-logs?page=0&size=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "audit-logs"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Requires AUDIT_READ. Business changes only - routine reads are deliberately not audited."
+          }
+        },
+        {
+          "name": "Audit logs for one ride",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/audit-logs?entityType=Ride&entityId={{rideId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "audit-logs"
+              ],
+              "query": [
+                {
+                  "key": "entityType",
+                  "value": "Ride"
+                },
+                {
+                  "key": "entityId",
+                  "value": "{{rideId}}"
+                }
+              ]
+            },
+            "description": "entityType is one of Ride, Driver, Vehicle, Coupon, PricingRule, Configuration."
+          }
+        },
+        {
+          "name": "Audit logs by request id",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "description": "Optional. Generated if absent; echoed back in the response."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/audit-logs?requestId=paste-an-X-Request-Id-here",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "audit-logs"
+              ],
+              "query": [
+                {
+                  "key": "requestId",
+                  "value": "paste-an-X-Request-Id-here"
+                }
+              ]
+            },
+            "description": "Every response carries X-Request-Id; use it to see everything one request changed."
+          }
+        }
+      ]
+    },
+    {
+      "name": "9. City pricing demo (Delhi)",
+      "description": "Proves city based pricing end to end.\n\nSeeded drivers are all in Bengaluru, so a Delhi booking would fail with NO_DRIVER_IN_RADIUS before pricing is ever reached - the GEO search runs first. Run these in order to put a driver in Delhi, then book.\n\nExpected: the same 9 km trip costs more in Delhi (min 60, 12/9/6 per km) than in Bengaluru (min 50, 10/8/5 per km).",
+      "item": [
+        {
+          "name": "1. Register Delhi driver",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/drivers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "drivers"
+              ]
+            },
+            "description": "Public onboarding. Creates the login account and the driver profile together.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Delhi Driver\",\n  \"email\": \"delhi.driver@ridehailing.com\",\n  \"password\": \"Driver@123\",\n  \"phone\": \"+919111100001\",\n  \"licenseNumber\": \"DL-2024-0001\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.success) { pm.collectionVariables.set('delhiDriverId', res.data.id); }",
+                  "else { console.warn(res.error); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Login Delhi driver",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"delhi.driver@ridehailing.com\",\n  \"password\": \"Driver@123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.success) { pm.collectionVariables.set('delhiDriverToken', res.data.accessToken); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. Register vehicle",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{delhiDriverToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/drivers/{{delhiDriverId}}/vehicles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "drivers",
+                "{{delhiDriverId}}",
+                "vehicles"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"carType\": \"HATCHBACK\",\n  \"registrationNumber\": \"DL01AA1111\",\n  \"make\": \"Maruti\",\n  \"model\": \"Swift\",\n  \"color\": \"White\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "4. Go AVAILABLE",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{delhiDriverToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/drivers/{{delhiDriverId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "drivers",
+                "{{delhiDriverId}}",
+                "status"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"AVAILABLE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "5. Ping location in Delhi (Connaught Place)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{delhiDriverToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/drivers/{{delhiDriverId}}/location",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "drivers",
+                "{{delhiDriverId}}",
+                "location"
+              ]
+            },
+            "description": "Must run within driver.location.ttl.seconds (60) of the booking, or the driver is pruned as stale.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"latitude\": 28.6315,\n  \"longitude\": 77.2167\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "6. Book from Delhi",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{riderToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/rides",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rides"
+              ]
+            },
+            "description": "Pickup falls inside the DELHI zone, so DELHI_STANDARD prices it. Check fare.pricingZoneCode in the response.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pickupLatitude\": 28.6315,\n  \"pickupLongitude\": 77.2167,\n  \"pickupAddress\": \"Connaught Place\",\n  \"dropLatitude\": 28.5562,\n  \"dropLongitude\": 77.1,\n  \"dropAddress\": \"IGI Airport\",\n  \"carType\": \"HATCHBACK\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.success) {",
+                  "    const f = res.data.fare;",
+                  "    console.log('zone=' + f.pricingZoneCode + ' rule=' + f.pricingRuleCode +",
+                  "        ' distance=' + res.data.distanceKm + 'km total=' + f.totalFare);",
+                  "    pm.test('priced by the Delhi zone', () => pm.expect(f.pricingZoneCode).to.eql('DELHI'));",
+                  "} else { console.warn(res.error.code + ': ' + res.error.message); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "7. Compare: same trip length in Bengaluru",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{riderToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/rides",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rides"
+              ]
+            },
+            "description": "Needs a Bengaluru driver pinged first (folder 2). Same ~9 km, cheaper: zone BANGALORE, rule STANDARD.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pickupLatitude\": 12.9716,\n  \"pickupLongitude\": 77.5946,\n  \"pickupAddress\": \"MG Road\",\n  \"dropLatitude\": 12.9081,\n  \"dropLongitude\": 77.6476,\n  \"dropAddress\": \"HSR Layout\",\n  \"carType\": \"HATCHBACK\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.success) { const f = res.data.fare;",
+                  "    console.log('zone=' + f.pricingZoneCode + ' total=' + f.totalFare); }"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
