@@ -955,8 +955,10 @@ demo drivers alive longer, at the cost of dispatching staler positions.
 
 Known gaps, listed so nobody assumes they exist:
 
-* **No tests.** JUnit/Mockito/Testcontainers are deliberately excluded for now;
-  testing is a separate planned phase.
+* **No unit tests.** JUnit/Mockito/Testcontainers are deliberately excluded;
+  unit testing is a separate planned phase. There *is* an end-to-end smoke
+  workflow (`scripts/e2e-ride-workflow.sh`, run by CI against real MySQL and
+  Redis) but it exercises the API from outside, not individual units.
 * **No token refresh or logout.** Access tokens simply expire; there is no refresh
   token and no revocation list.
 * **No driver rating submission flow.** `drivers.rating` is seeded and read by the

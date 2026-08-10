@@ -68,6 +68,31 @@ sequenceDiagram
 
 ---
 
+## Run it automatically
+
+Everything below is executable. `scripts/e2e-ride-workflow.sh` drives the whole
+flow and asserts each result:
+
+```bash
+BASE=http://localhost:8080/api/v1 ./scripts/e2e-ride-workflow.sh
+```
+
+```
+1. Rider login
+  PASS  rider token issued
+...
+6. Book a ride
+  PASS  ride assigned
+  PASS  distance computed
+...
+Result: 26 passed, 0 failed
+```
+
+CI runs the same script on every push and pull request
+(`.github/workflows/e2e-ride-workflow.yml`) against real MySQL 8 and Redis 7
+service containers — so migrations, JPA mappings, the security chain and Redis
+GEO are all exercised, which no unit test would cover.
+
 ## Step 0 — Prerequisites
 
 ```bash
