@@ -7,8 +7,11 @@
 name: E2E Ride Workflow
 
 on:
+  # Feature branches are included so the workflow can be exercised before it
+  # reaches main. workflow_dispatch only appears in the UI once this file is on
+  # the default branch, so a push trigger is the only way to run it from here.
   push:
-    branches: [main]
+    branches: [main, 'docs/**', 'ci/**', 'feat/**', 'fix/**']
   pull_request:
   workflow_dispatch:
 
