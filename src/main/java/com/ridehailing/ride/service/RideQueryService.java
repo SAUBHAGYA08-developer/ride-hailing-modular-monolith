@@ -49,13 +49,13 @@ public class RideQueryService {
             throw new BusinessException(ErrorCode.ACCESS_DENIED, "You are not allowed to read these rides");
         }
         return PageResponse.from(rideRepository.findByUserIdOrderByRequestedAtDesc(userId, pageable),
-                rideMapper::toResponse);
+                rideMapper::toListResponse);
     }
 
     @Transactional(readOnly = true)
     public PageResponse<RideResponse> findByDriver(Long driverId, AuthPrincipal principal, Pageable pageable) {
         driverService.requireOwnership(principal, driverId);
         return PageResponse.from(rideRepository.findByDriverIdOrderByRequestedAtDesc(driverId, pageable),
-                rideMapper::toResponse);
+                rideMapper::toListResponse);
     }
 }

@@ -2,6 +2,7 @@ package com.ridehailing.ride.dto;
 
 import com.ridehailing.common.domain.CarType;
 import com.ridehailing.driver.api.DriverSummary;
+import com.ridehailing.driver.api.VehicleSummary;
 import com.ridehailing.payment.api.PaymentSummary;
 import com.ridehailing.ride.entity.RideStatus;
 
@@ -18,6 +19,8 @@ public record RideResponse(Long id,
                            Long driverId,
                            DriverSummary driver,
                            Long vehicleId,
+                           // Null on paginated history: one lookup per row would be an N+1 against a remote database.
+                           VehicleSummary vehicle,
                            CarType requestedCarType,
                            CarType assignedCarType,
                            boolean carTypeUpgraded,

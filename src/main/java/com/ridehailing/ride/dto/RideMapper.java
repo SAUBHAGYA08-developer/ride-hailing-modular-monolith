@@ -4,7 +4,9 @@ import com.ridehailing.common.domain.CarTypePolicy;
 import com.ridehailing.configuration.ConfigKeys;
 import com.ridehailing.configuration.service.ConfigurationService;
 import com.ridehailing.driver.api.DriverSummary;
+import com.ridehailing.driver.api.VehicleSummary;
 import com.ridehailing.driver.service.DriverService;
+import com.ridehailing.driver.service.VehicleService;
 import com.ridehailing.payment.api.PaymentSummary;
 import com.ridehailing.payment.entity.PaymentPurpose;
 import com.ridehailing.payment.service.PaymentService;
@@ -28,10 +30,20 @@ public class RideMapper {
     private static final BigDecimal MINUTES_PER_HOUR = BigDecimal.valueOf(60);
 
     private final DriverService driverService;
+    private final VehicleService vehicleService;
     private final PaymentService paymentService;
     private final ConfigurationService configurationService;
 
     public RideResponse toResponse(Ride ride) {
+        return toResponse(ride, true);
+    }
+
+    /** History rows skip the vehicle lookup: one query per row is an N+1, and a list needs no number plate. */
+    public RideResponse toListResponse(Ride ride) {
+        return toResponse(ride, false);
+    }
+
+    private RideResponse toResponse(Ride ride, boolean includeVehicle) {
         DriverSummary driver = null;
         if (ride.getDriverId() != null) {
             try {
@@ -42,13 +54,23 @@ public class RideMapper {
             }
         }
 
+        VehicleSummary vehicle = null;
+        if (includeVehicle && ride.getVehicleId() != null) {
+            try {
+                vehicle = vehicleService.findSummary(ride.getVehicleId()).orElse(null);
+            } catch (RuntimeException ex) {
+                // A missing vehicle row must not make an existing ride unreadable.
+                log.warn("Could not load vehicle {} for ride {}", ride.getVehicleId(), ride.getId());
+            }
+        }
+
         FareSummary fare = new FareSummary(ride.getPricingRuleCode(), ride.getPricingZoneCode(), ride.getDistanceFare(),
                 ride.getCarTypeMultiplier(), ride.getSurgeMultiplier(), ride.getMinimumFare(),
                 ride.isMinimumFareApplied(), ride.getFareBeforeDiscount(), ride.getCouponCode(),
                 ride.getDiscountAmount(), ride.getTotalFare());
 
         return new RideResponse(ride.getId(), ride.getStatus(), ride.getUserId(), ride.getDriverId(), driver,
-                ride.getVehicleId(), ride.getRequestedCarType(), ride.getAssignedCarType(),
+                ride.getVehicleId(), vehicle, ride.getRequestedCarType(), ride.getAssignedCarType(),
                 CarTypePolicy.isUpgrade(ride.getRequestedCarType(), ride.getAssignedCarType()),
                 ride.getDistanceKm(), ride.getPickupLatitude(), ride.getPickupLongitude(), ride.getPickupAddress(),
                 ride.getDropLatitude(), ride.getDropLongitude(), ride.getDropAddress(), fare,

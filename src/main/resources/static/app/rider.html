@@ -203,7 +203,9 @@ if (RH.requireRole("USER")) {
       ["Ride", `<span class="mono">#${RH.esc(r.id)}</span>`],
       ["Driver", d ? `${RH.esc(d.fullName)} <span class="muted mono">${RH.esc(d.phone || "")}</span> <span class="pill">★ ${RH.fmt(d.rating)}</span>` : `<span class="muted">not assigned yet</span>`],
       ["Car type", `${RH.esc(r.requestedCarType || "—")} → ${RH.esc(r.assignedCarType || "—")} ` + (upgraded ? `<span class="pill warn">upgraded</span>` : "")],
-      ["Vehicle id", r.vehicleId ? `<span class="mono">${RH.esc(r.vehicleId)}</span>` : "—"],
+      ["Vehicle", r.vehicle
+        ? `<span class="mono">${RH.esc(r.vehicle.registrationNumber)}</span> · ${RH.esc([r.vehicle.make, r.vehicle.model].filter(Boolean).join(" "))}${r.vehicle.color ? " · " + RH.esc(r.vehicle.color) : ""} <span class="pill">${RH.esc(r.vehicle.carType)}</span>`
+        : (r.vehicleId ? `<span class="mono">#${RH.esc(r.vehicleId)}</span>` : "—")],
       ["Trip distance km", RH.fmt(r.distanceKm)],
       ["Pickup", RH.esc(r.pickupAddress || "—")],
       ["Drop", RH.esc(r.dropAddress || "—")],

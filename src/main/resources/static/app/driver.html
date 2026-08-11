@@ -55,6 +55,7 @@
 
   <div class="card">
     <h2>My rides</h2>
+    <div id="activeRideCard"></div>
     <div class="row">
       <button id="btnRides" class="sm">Refresh</button>
       <button id="btnPrev" class="sm">Prev</button>
@@ -316,6 +317,29 @@
     return fresh;
   }
 
+
+  // Which car to take is only knowable from the single-ride read: the list response omits the vehicle by design.
+  let activeVehicleFor = null;
+  async function renderActiveRide() {
+    const box = $("activeRideCard");
+    if (!st.active) { box.innerHTML = ""; activeVehicleFor = null; return; }
+    if (activeVehicleFor === st.active.id) return;
+    const r = await RH.api("/rides/" + st.active.id);
+    activeVehicleFor = r.id;
+    const v = r.vehicle;
+    box.innerHTML = '<div class="card" style="margin:0 0 10px"><div class="kv">'
+      + '<span class="k">Ride</span><span class="mono">#' + RH.esc(r.id) + ' · ' + RH.esc(r.status) + '</span>'
+      + '<span class="k">Take this car</span><span>' + (v
+          ? '<span class="mono">' + RH.esc(v.registrationNumber) + '</span> · '
+            + RH.esc([v.make, v.model].filter(Boolean).join(" "))
+            + (v.color ? ' · ' + RH.esc(v.color) : '')
+            + ' <span class="pill">' + RH.esc(v.carType) + '</span>'
+          : '<span class="muted">not recorded</span>') + '</span>'
+      + '<span class="k">Pickup</span><span>' + RH.esc(r.pickupAddress || "—") + '</span>'
+      + '<span class="k">Drop</span><span>' + RH.esc(r.dropAddress || "—") + '</span>'
+      + '</div></div>';
+  }
+
   async function loadRides() {
     const size = Math.max(1, Number($("size").value) || 10);
     const res = await RH.api("/drivers/" + driverId() + "/rides?page=" + st.page + "&size=" + size);
@@ -329,6 +353,7 @@
       : '<tr><td colspan="8" class="muted">no rides on this page</td></tr>';
     st.active = items.find(r => LIVE.includes(r.status)) || null;
     if (st.active) $("payRide").value = st.active.id;
+    renderActiveRide().catch(() => { activeVehicleFor = null; });
     if (fresh.length) RH.banner("rideBanner", "New assignment — ride #" + fresh.join(", #") + " is yours. Press Start once the rider is aboard.", "ok");
     syncPoll();
     return items;

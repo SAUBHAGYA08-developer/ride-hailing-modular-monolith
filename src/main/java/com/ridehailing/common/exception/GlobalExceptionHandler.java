@@ -17,6 +17,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.servlet.NoHandlerFoundException;
@@ -113,6 +114,13 @@ public class GlobalExceptionHandler {
         log.error("A dependency is unavailable", ex);
         return respond(ErrorCode.DEPENDENCY_UNAVAILABLE,
                 "A dependency is temporarily unavailable, please retry", null);
+    }
+
+    /** A missing static file is a 404, not a fault: browsers request /favicon.ico unprompted. */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMissingResource(NoResourceFoundException ex) {
+        log.debug("No static resource {}", ex.getResourcePath());
+        return ResponseEntity.notFound().build();
     }
 
     @ExceptionHandler(Exception.class)

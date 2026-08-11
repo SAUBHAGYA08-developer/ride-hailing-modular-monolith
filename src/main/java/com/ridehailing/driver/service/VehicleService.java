@@ -5,6 +5,7 @@ import com.ridehailing.audit.AuditEntities;
 import com.ridehailing.audit.service.AuditService;
 import com.ridehailing.common.error.ErrorCode;
 import com.ridehailing.common.exception.BusinessException;
+import com.ridehailing.driver.api.VehicleSummary;
 import com.ridehailing.driver.dto.CreateVehicleRequest;
 import com.ridehailing.driver.dto.VehicleResponse;
 import com.ridehailing.driver.entity.Vehicle;
@@ -16,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -63,6 +65,12 @@ public class VehicleService {
     @Transactional(readOnly = true)
     public List<VehicleResponse> findByDriver(Long driverId) {
         return vehicleRepository.findByDriverId(driverId).stream().map(this::toResponse).toList();
+    }
+
+    /** The published contract other modules read; they never reach into the vehicle table themselves. */
+    @Transactional(readOnly = true)
+    public Optional<VehicleSummary> findSummary(Long vehicleId) {
+        return vehicleId == null ? Optional.empty() : vehicleRepository.findSummaryById(vehicleId);
     }
 
     private VehicleResponse toResponse(Vehicle vehicle) {
