@@ -81,7 +81,8 @@
       <tbody id="rideRows"></tbody>
     </table></div>
     <div class="muted" style="font-size:12px; margin-top:8px">
-      The backend has no push channel, so a live ride is polled every 4s — never faster, never while the tab is hidden, never once it is terminal.
+      The backend has no push channel, so one 4s poll does both jobs: it announces a ride newly assigned to you and follows the live one.
+      Never faster than 4s, never while the tab is hidden, never while OFFLINE, and it stops rather than loops on an error.
     </div>
     <div id="rideBanner" class="banner"></div>
   </div>
@@ -125,8 +126,9 @@
   const POLL_MS = 4000, MIN_PING_MS = 5000, PROBE_MAX_ID = 12;
   const LIVE = ["DRIVER_ASSIGNED", "STARTED"];
 
-  const st = { busy: false, status: null, lastPing: 0, autoWanted: false,
-               autoTimer: null, pollTimer: null, page: 0, totalPages: 1, active: null };
+  const st = { busy: false, status: null, lastPing: 0, autoWanted: false, autoTimer: null,
+               pollTimer: null, page: 0, totalPages: 1, active: null,
+               seen: new Set(), seenFor: null, fresh: new Set() };
 
   const driverId = () => String($("driverId").value).trim();
 
@@ -172,6 +174,8 @@
       '<span class="k">rating</span><span>' + fmt(d.rating) + '</span>' +
       '<span class="k">total rides</span><span>' + d.totalRides + '</span>' +
       '<span class="k">phone</span><span class="mono">' + esc(d.phone) + '</span>';
+    // Status decides whether the poller may run at all, so every render re-checks it.
+    syncPoll();
     return d;
   }
 
@@ -272,10 +276,10 @@
       : '<span class="pill ok">' + esc(p.method) + '</span>';
   }
 
-  function rideRow(r) {
+  function rideRow(r, fresh) {
     const live = LIVE.includes(r.status);
     const failed = r.payment && r.payment.status === "FAILED";
-    return '<tr' + (failed ? ' style="background:#3a1414"' : '') + '>' +
+    return '<tr' + (fresh ? ' class="fresh"' : failed ? ' style="background:#3a1414"' : '') + '>' +
       '<td class="mono">#' + r.id + '</td>' +
       '<td>' + esc(r.status) + '</td>' +
       '<td>' + esc(r.assignedCarType || r.requestedCarType || "—") + '</td>' +
@@ -291,17 +295,41 @@
       '</td></tr>';
   }
 
+  // A ride needing action outranks a finished one; the API pages by recency, so this reorders the page only.
+  const ACTION_ORDER = { STARTED: 0, DRIVER_ASSIGNED: 1, REQUESTED: 2, COMPLETED: 3, CANCELLED: 4 };
+  function actionableFirst(items) {
+    return items.slice().sort((a, b) => {
+      const rank = (ACTION_ORDER[a.status] ?? 9) - (ACTION_ORDER[b.status] ?? 9);
+      return rank !== 0 ? rank : String(b.requestedAt || "").localeCompare(String(a.requestedAt || ""));
+    });
+  }
+
+  // The first list read for a driver seeds instead of announcing, so a ride already assigned is never called new.
+  function trackAssigned(items) {
+    const assigned = items.filter(r => r.status === "DRIVER_ASSIGNED").map(r => r.id);
+    const fresh = st.seenFor === driverId() ? assigned.filter(id => !st.seen.has(id)) : [];
+    st.seen = new Set(assigned);
+    st.seenFor = driverId();
+    // The highlight outlives the announcing tick and clears itself once the ride is started or cancelled.
+    fresh.forEach(id => st.fresh.add(id));
+    st.fresh.forEach(id => { if (!st.seen.has(id)) st.fresh.delete(id); });
+    return fresh;
+  }
+
   async function loadRides() {
     const size = Math.max(1, Number($("size").value) || 10);
     const res = await RH.api("/drivers/" + driverId() + "/rides?page=" + st.page + "&size=" + size);
-    const items = res.items || [];
+    const items = actionableFirst(res.items || []);
     st.totalPages = Math.max(1, res.totalPages);
     $("pageInfo").textContent = "page " + (res.page + 1) + " of " + st.totalPages + " · " + res.totalElements + " rides";
+    // The API pages by recency, so only page 0 can honestly tell a new assignment from an old one.
+    const fresh = st.page === 0 ? trackAssigned(items) : [];
     $("rideRows").innerHTML = items.length
-      ? items.map(rideRow).join("")
+      ? items.map(r => rideRow(r, st.page === 0 && st.fresh.has(r.id))).join("")
       : '<tr><td colspan="8" class="muted">no rides on this page</td></tr>';
     st.active = items.find(r => LIVE.includes(r.status)) || null;
     if (st.active) $("payRide").value = st.active.id;
+    if (fresh.length) RH.banner("rideBanner", "New assignment — ride #" + fresh.join(", #") + " is yours. Press Start once the rider is aboard.", "ok");
     syncPoll();
     return items;
   }
@@ -317,8 +345,15 @@
     if (act === "pay") { $("payRide").value = id; return loadPayments(); }
     guard("rideBanner", async () => {
       if (act === "start") await RH.api("/rides/" + id + "/start", { method: "POST" });
-      if (act === "complete") await RH.api("/rides/" + id + "/complete", { method: "POST", body: { paymentMethod: method } });
+      let completed = null;
+      if (act === "complete") completed = await RH.api("/rides/" + id + "/complete", { method: "POST", body: { paymentMethod: method } });
       if (act === "cancel") await RH.api("/rides/" + id + "/cancel", { method: "POST", body: { reason: $("reason").value } });
+      // The car really is at the drop now, so the phone reports it; the server never infers a position from a ride.
+      if (completed && completed.dropLatitude != null && completed.dropLongitude != null) {
+        $("lat").value = completed.dropLatitude;
+        $("lng").value = completed.dropLongitude;
+        await pingOnce();
+      }
       await loadRides();
       await loadProfile();
       if (act === "complete") { $("payRide").value = id; await loadPayments(); }
@@ -328,31 +363,41 @@
 
   /* -------------------------------- polling ---------------------------- */
 
+  // An OFFLINE driver can neither be dispatched nor act, so there is nothing to watch for.
+  const pollWanted = () => !document.hidden && !!st.status && st.status !== "OFFLINE";
+  const activeKey = () => st.active ? st.active.id + ":" + st.active.status : "";
+
   function syncPoll() {
-    const live = st.active && LIVE.includes(st.active.status) && !document.hidden;
-    if (!live) return stopPoll();
-    if (st.pollTimer) return;
-    st.pollTimer = setInterval(pollActive, POLL_MS);
+    if (!pollWanted()) return stopPoll();
+    if (!st.pollTimer) st.pollTimer = setInterval(poll, POLL_MS);
     $("pollPill").className = "pill ok";
-    $("pollPill").textContent = "polling ride #" + st.active.id + " every 4s";
+    $("pollPill").textContent = st.active
+      ? "polling ride #" + st.active.id + " every 4s"
+      : "watching for a new assignment every 4s";
   }
 
-  function stopPoll() {
+  function stopPoll(reason) {
     clearInterval(st.pollTimer);
     st.pollTimer = null;
-    $("pollPill").className = "pill";
-    $("pollPill").textContent = "not polling";
+    $("pollPill").className = "pill" + (reason ? " bad" : "");
+    $("pollPill").textContent = reason || "not polling";
   }
 
-  async function pollActive() {
-    if (!st.active || document.hidden) return stopPoll();
+  // One timer, one request per tick: the page 0 list carries both a new assignment and the live ride's next status.
+  async function poll() {
+    if (st.busy) return;
+    if (!pollWanted()) return stopPoll();
+    const before = activeKey();
     try {
-      const ride = await RH.api("/rides/" + st.active.id);
-      const changed = ride.status !== st.active.status;
-      st.active = ride;
-      if (changed) { await loadRides(); await loadProfile(); } else syncPoll();
+      if (st.page === 0) await loadRides();
+      else if (st.active) {
+        const ride = await RH.api("/rides/" + st.active.id);
+        st.active = LIVE.includes(ride.status) ? ride : null;
+      }
+      // BUSY is owned by ride assignment, so the profile is only stale once the live ride moved.
+      if (activeKey() !== before) await loadProfile();
     } catch {
-      stopPoll();
+      stopPoll("polling stopped after an error — press Refresh");
     }
   }
 

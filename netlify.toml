@@ -1,6 +1,7 @@
 # Static site: the pages call the API cross-origin, so there is nothing to build.
+# Published straight from where Spring serves them, so there is one copy of each page and never a stale one.
 [build]
-  publish = "web"
+  publish = "src/main/resources/static/app"
   command = ""
 
 # The API host must also list this site in CORS_ALLOWED_ORIGINS or the browser blocks every call.

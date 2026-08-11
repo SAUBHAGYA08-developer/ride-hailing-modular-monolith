@@ -13,6 +13,7 @@
   <div class="card">
     <h2>Trip</h2>
     <div class="row">
+      <div class="field" style="min-width:230px"><label>Trip preset</label><select id="tripPreset"></select></div>
       <div class="field"><label>Pickup lat</label><input id="pickLat" class="narrow" value="12.9716"></div>
       <div class="field"><label>Pickup lng</label><input id="pickLng" class="narrow" value="77.5946"></div>
       <div class="field" style="flex:1; min-width:200px"><label>Pickup address</label><input id="pickAddr" value="MG Road, Bangalore"></div>
@@ -269,13 +270,37 @@ if (RH.requireRole("USER")) {
 
   document.addEventListener("visibilitychange", () => schedulePoll());
 
+  // Short hops stay inside the 5 km search radius; the long ones show tiered pricing and the zone rule.
+  const TRIPS = [
+    { label: "MG Road → Koramangala (5.0 km)", p: [12.9716, 77.5946], d: [12.9352, 77.6245], pa: "MG Road, Bangalore", da: "Koramangala, Bangalore" },
+    { label: "MG Road → Indiranagar (3.4 km)", p: [12.9716, 77.5946], d: [12.9784, 77.6408], pa: "MG Road, Bangalore", da: "Indiranagar, Bangalore" },
+    { label: "MG Road → Airport (30 km, tiered)", p: [12.9716, 77.5946], d: [13.1986, 77.7066], pa: "MG Road, Bangalore", da: "Kempegowda Airport" },
+    { label: "Delhi: CP → Gurgaon (25 km, DELHI zone)", p: [28.6315, 77.2167], d: [28.4595, 77.0266], pa: "Connaught Place", da: "Gurgaon" },
+    { label: "Pune: Shivajinagar → Hinjewadi (17 km, PUNE zone)", p: [18.5308, 73.8470], d: [18.5913, 73.7389], pa: "Shivajinagar", da: "Hinjewadi" },
+  ];
+  RH.$("tripPreset").innerHTML = TRIPS.map((t, i) => `<option value="${i}">${RH.esc(t.label)}</option>`).join("");
+  RH.$("tripPreset").onchange = () => {
+    const t = TRIPS[+RH.$("tripPreset").value];
+    RH.$("pickLat").value = t.p[0]; RH.$("pickLng").value = t.p[1]; RH.$("pickAddr").value = t.pa;
+    RH.$("dropLat").value = t.d[0]; RH.$("dropLng").value = t.d[1]; RH.$("dropAddr").value = t.da;
+  };
+
+  // A live ride outranks a finished one; the API pages by recency, so this reorders the page only.
+  const ACTION_ORDER = { STARTED: 0, DRIVER_ASSIGNED: 1, REQUESTED: 2, COMPLETED: 3, CANCELLED: 4 };
+  function actionableFirst(items) {
+    return items.slice().sort((a, b) => {
+      const rank = (ACTION_ORDER[a.status] ?? 9) - (ACTION_ORDER[b.status] ?? 9);
+      return rank !== 0 ? rank : String(b.requestedAt || "").localeCompare(String(a.requestedAt || ""));
+    });
+  }
+
   async function loadHistory() {
     RH.banner("histBanner", "");
     if (!ME) return RH.banner("histBanner", "The token carries no subject claim, so this page cannot tell which user it is.");
     const res = await RH.api("/users/" + encodeURIComponent(ME) + "/rides?page=" + page + "&size=10");
     pages = Math.max(res.totalPages, 1);
     RH.$("pageInfo").textContent = `page ${res.page + 1} of ${pages} · ${res.totalElements} rides`;
-    RH.$("histRows").innerHTML = (res.items || []).map(r =>
+    RH.$("histRows").innerHTML = actionableFirst(res.items || []).map(r =>
       `<tr>
          <td class="mono">${RH.esc(r.id)}</td>
          <td>${statusPill(r.status)}</td>

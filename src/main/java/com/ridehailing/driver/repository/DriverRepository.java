@@ -96,6 +96,20 @@ public interface DriverRepository extends JpaRepository<Driver, Long> {
     long countOnDutyIn(@Param("driverIds") Collection<Long> driverIds);
 
     /**
+     * The whole on-duty fleet, used by the stale ride reaper as a sanity check on
+     * Redis. An empty live set means either nobody is reporting or the presence
+     * store could not answer, and MySQL is the only thing that can tell the two
+     * apart: on-duty drivers with nobody live is a presence outage, not a fleet
+     * that evaporated in the last minute.
+     */
+    @Query("""
+            select count(d.id)
+            from Driver d
+            where d.status <> com.ridehailing.driver.entity.DriverStatus.OFFLINE
+            """)
+    long countOnDuty();
+
+    /**
      * Resolves Redis proximity hits against the authoritative availability
      * state, keeping the driver and the vehicle that would serve the ride in a
      * single round trip. The version travels with the candidate so the caller

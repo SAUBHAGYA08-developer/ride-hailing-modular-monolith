@@ -47,6 +47,8 @@ table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); font-size: 13px; }
 th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
 .scroll { overflow-x: auto; }
+tr.fresh > td { background: #103021; }
+tr.fresh > td:first-child { box-shadow: inset 3px 0 0 var(--ok); color: var(--ok); font-weight: 600; }
 
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
 .tile { background: var(--panel2); border: 1px solid var(--line); border-radius: 9px; padding: 11px; }

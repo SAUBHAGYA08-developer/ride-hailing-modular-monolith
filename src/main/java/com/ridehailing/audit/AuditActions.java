@@ -10,6 +10,12 @@ public final class AuditActions {
     public static final String RIDE_CREATED = "RIDE_CREATED";
     public static final String RIDE_STATUS_CHANGED = "RIDE_STATUS_CHANGED";
 
+    /** The stale ride reaper cancelled a ride whose driver went dark before pickup. */
+    public static final String RIDE_REAPED_STALE = "RIDE_REAPED_STALE";
+
+    /** The reaper found a STARTED ride with an absent driver and surfaced it instead of cancelling. */
+    public static final String RIDE_FLAGGED_STALE = "RIDE_FLAGGED_STALE";
+
     /** Filed against the Ride entity, so the money shows on the same timeline as the status changes that caused it. */
     public static final String PAYMENT_COLLECTED = "PAYMENT_COLLECTED";
     public static final String PAYMENT_FAILED = "PAYMENT_FAILED";

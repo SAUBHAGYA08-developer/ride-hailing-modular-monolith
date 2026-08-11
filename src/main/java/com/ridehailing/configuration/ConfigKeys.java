@@ -29,6 +29,11 @@ public final class ConfigKeys {
     public static final String BOOKING_LOCK_TTL_SECONDS = "ride.booking.lock.ttl.seconds";
     public static final String PICKUP_AVERAGE_SPEED_KMPH = "ride.pickup.average.speed.kmph";
 
+    /** Kill switch for the stale ride reaper, so a demo can freeze the world without a redeploy. */
+    public static final String RIDE_REAPER_ENABLED = "ride.reaper.enabled";
+    public static final String RIDE_STALE_GRACE_SECONDS = "ride.stale.grace.seconds";
+    public static final String RIDE_REAPER_BATCH_SIZE = "ride.reaper.batch.size";
+
     public static final String PAYMENT_SIMULATED_FAILURE_METHODS = "payment.simulated.failure.methods";
     public static final String PAYMENT_CANCELLATION_FEE_METHOD = "payment.cancellation.fee.method";
 

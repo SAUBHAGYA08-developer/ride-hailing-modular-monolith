@@ -1,5 +1,7 @@
 package com.ridehailing.common.util;
 
+import com.ridehailing.common.error.ErrorCode;
+import com.ridehailing.common.exception.BusinessException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -8,6 +10,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import java.math.BigDecimal;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * Rounding, which every fare, discount and cancellation fee passes through.
@@ -75,5 +78,38 @@ class MoneyTest {
         assertThat(amount).isEqualByComparingTo(expected);
         assertThat(amount.signum()).isGreaterThanOrEqualTo(0);
         assertThat(amount.scale()).isEqualTo(Money.SCALE);
+    }
+
+    @Test
+    @DisplayName("an amount that must be charged or stored is refused when absent, rather than invented as zero")
+    void anAbsentAmountIsRefusedRatherThanInvented() {
+        BusinessException thrown = assertThrows(BusinessException.class, () -> Money.nonNegative(null));
+
+        assertThat(thrown.errorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR);
+        assertThat(thrown.getMessage()).contains("amount is required");
+    }
+
+    @Test
+    @DisplayName("an absent amount is a domain error the caller can answer with, never an internal server error")
+    void anAbsentAmountIsNeverAnInternalError() {
+        BusinessException thrown = assertThrows(BusinessException.class, () -> Money.nonNegative(null));
+
+        assertThat(thrown).isNotInstanceOf(NullPointerException.class);
+        assertThat(thrown.errorCode().httpStatus().is5xxServerError()).isFalse();
+    }
+
+    @Test
+    @DisplayName("both entry points agree that absence is not money: one keeps it absent, the other refuses it")
+    void bothEntryPointsAgreeThatAbsenceIsNotMoney() {
+        assertThat(Money.round(null)).isNull();
+        assertThrows(BusinessException.class, () -> Money.nonNegative(null));
+    }
+
+    @Test
+    @DisplayName("a coupon that yields no discount amount cannot silently price a ride at full fare")
+    void aCouponWithNoDiscountAmountCannotBePriced() {
+        BigDecimal fareBeforeDiscount = new BigDecimal("187.43");
+
+        assertThrows(BusinessException.class, () -> Money.nonNegative(null).min(fareBeforeDiscount));
     }
 }

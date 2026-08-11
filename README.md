@@ -354,6 +354,7 @@ lookup by entity or by request). There are no speculative indexes.
 | `V15__add_city_pricing_zones.sql` | `pricing_zones` table, `rides.pricing_zone_code`, Delhi/Pune rules + 3 city zones |
 | `V18__create_payment_tables.sql` | `payment_schema` + `payments`, payment settings, `PAYMENT_READ` / `PAYMENT_COLLECT` |
 | `V20__add_ride_pickup_distance.sql` | `rides.driver_pickup_distance_km`, `ride.pickup.average.speed.kmph` |
+| `V22__add_ride_stale_tracking.sql` | `rides.stale_flagged_at` + sweep index, `ride.reaper.enabled` / `ride.stale.grace.seconds` / `ride.reaper.batch.size` |
 
 Required data is created by migrations, never by application startup code. The one
 startup component that exists (`DriverLocationWarmupRunner`) only republishes
@@ -877,6 +878,88 @@ Verified against a running instance: rider inside grace → `0.00`; driver cance
 grace → `0.00`; rider past grace → `30.00`; `total_fare` unchanged at `50.00` in all
 three.
 
+### Stale rides: the driver who disappears
+
+A driver whose app is killed or loses the network makes **no API call at all**. Nothing in
+the lifecycle above fires, so the ride sat in `DRIVER_ASSIGNED` or `STARTED` forever and
+the driver stayed `BUSY` — the only escape was a rider or an admin cancelling. Redis
+already knew they were gone: the freshness marker behind `driver.location.ttl.seconds`
+expires 60 s after the last ping. Nothing acted on it.
+
+`ride.reaper.StaleRideReaperJob` is the one scheduled job in the application. It runs
+every 60 s (`app.ride.reaper.interval-ms`, `fixedDelay` so it cannot overlap itself) and
+needs **two independent facts** to agree before it touches anything:
+
+| Fact | Store | Why it is not enough on its own |
+|---|---|---|
+| the ride has been in its current state longer than `ride.stale.grace.seconds` | MySQL | a slow pickup is not an abandoned one |
+| the driver is absent from `DriverLocationService.liveDriverIds()` | Redis | a 60 s tunnel is not a dead app |
+
+The grace window is **900 s, not the 60 s location TTL**. Reaping on Redis absence alone
+would cancel a ride in progress every time a driver drove through a basement car park.
+What is measured is the age of the *state* — `COALESCE(started_at, assigned_at)` — not the
+age of the ride, so a long trip is never mistaken for a stuck one.
+
+**A `STARTED` ride and a `DRIVER_ASSIGNED` ride are not the same problem**, and the reaper
+treats them differently:
+
+| State | What happens | Why |
+|---|---|---|
+| `DRIVER_ASSIGNED` | ride `CANCELLED` with `cancelled_by = SYSTEM`, driver released to `AVAILABLE`, coupon use returned, fee `0.00` | nobody has been picked up, so the whole cost is a rebook, while a rider waiting for a car that will never arrive is the actual harm |
+| `STARTED` | `rides.stale_flagged_at` stamped and a `RIDE_FLAGGED_STALE` audit row written; the ride keeps running and the driver keeps the reservation | the rider may already be at the drop and `CANCELLED` is terminal, so cancelling would strand the fare and destroy the completion path; releasing a driver who could still have a passenger aboard is worse than a flag |
+
+A flagged `STARTED` ride is never silently ignored — it is stamped in the ride row and
+audited once — but resolving it is an operator decision, because only a human can find out
+whether that trip actually finished.
+
+**The fee is always zero.** `CancelledBy.SYSTEM` already existed in the enum, documented
+as *reserved for automated expiry*, and `CancellationFeePolicy` charges nobody but `USER`,
+so nothing had to be extended. The reaper still calls the policy with the real configured
+fee rather than hardcoding `0.00`: the zero is the policy's decision, and there stays
+exactly one place that decides what a cancellation costs.
+
+**Nothing bypasses the normal path.** The transition goes through
+`RideStateMachine.assertCanTransition`, the driver is handed back through the same
+`DriverReservationService.release` the manual cancel uses, and the same
+`RIDE_STATUS_CHANGED` audit row is written. A reaped ride is indistinguishable from a
+manually cancelled one except for its actor (`SYSTEM`), its reason, and one extra
+`RIDE_REAPED_STALE` row naming the signal, how long the driver had been unseen, and the
+grace it crossed.
+
+**Two instances cannot double-reap.** The claim is a conditional `UPDATE` in the shape of
+`DriverRepository.release` — status predicate, `stale_flagged_at IS NULL`, no
+read-then-write — so exactly one sweep gets `1` back and resolves the ride while the rest
+get `0` and skip. Because `IS NULL` is also false on the next run, the same predicate makes
+a flagged `STARTED` ride surface once instead of being re-audited every minute for the rest
+of its life. Each ride is resolved in its own transaction, so one bad row cannot roll back
+the batch, and `ride.reaper.batch.size` caps a single run.
+
+**The Redis-outage guard is the dangerous part.** An empty live set looks exactly like
+every driver having vanished at once. A dead Redis *throws* rather than returning empty,
+and that is caught and the run abandoned; an empty set therefore means Redis answered with
+nothing — a flushed or failed-over instance included. MySQL is the only thing that can
+tell that apart from an idle fleet: if anyone is on duty while nobody is live, the sweep
+logs an error and reaps nothing. The cost is deliberate — a system whose only on-duty
+drivers *are* the suspects will not self-heal and needs an operator — because the
+alternative is cancelling every ride in flight the first time a cache is flushed.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `ride.reaper.enabled` | `true` | kill switch; flip it through `PUT /configurations/{key}` to freeze the reaper for a demo |
+| `ride.stale.grace.seconds` | `900` | how long a ride may sit with an absent driver before it is reaped |
+| `ride.reaper.batch.size` | `50` | most rides one sweep may resolve |
+| `app.ride.reaper.interval-ms` | `60000` | sweep interval — technical, so a property rather than a config row |
+| `app.ride.reaper.initial-delay-ms` | `60000` | keeps the first sweep clear of startup warm-up |
+
+To demo it, keep **one** driver pinging and let a **second** one go dark after being
+assigned: the live set stays non-empty, so the outage guard does not trip, and once the
+grace window passes (drop it to `60` first) the abandoned ride is cancelled with a `0.00`
+fee while the healthy driver's ride is untouched. One run exercises the reap, the per-state
+split and the outage guard together.
+
+Not yet exercised against a running instance — treat this section as intended behaviour
+rather than observed, like the payment walkthrough below.
+
 ### Payments
 
 Money is collected **at completion, not at booking**, because that is the first
@@ -1235,7 +1318,9 @@ Known gaps, listed so nobody assumes they exist:
 * **No surge computation.** The surge multiplier is stored per pricing rule and
   gated by `surge.enabled`; there is no demand-based engine that adjusts it.
 * **No expired-idempotency-record sweeper.** The `idx_idempotency_expires` index is
-  in place for one, but no scheduled cleanup job runs.
+  in place for one, but nothing sweeps the rows. Scheduling itself now exists
+  (`@EnableScheduling`, used by the [stale ride reaper](#stale-rides-the-driver-who-disappears)),
+  so this is a job nobody has written rather than a missing capability.
 * **No road-distance ETA.** A straight-line pickup distance and a speed-derived
   pickup ETA now exist (see [How far away the driver is](#how-far-away-the-driver-is)),
   but both are honest approximations, and the trip duration is still not estimated at
