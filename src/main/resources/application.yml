@@ -1,10 +1,10 @@
 server:
   # PORT is injected by the host platform and wins; SERVER_PORT stays for local overrides.
-  port: ${PORT:${SERVER_PORT:8080}}
+  port: ${PORT:${SERVER_PORT:10000}}
   tomcat:
     threads:
       # 200 idle thread stacks are pure waste on a small container; lower it there.
-      max: ${TOMCAT_MAX_THREADS:200}
+      max: ${TOMCAT_MAX_THREADS:25}
   error:
     whitelabel:
       enabled: false
@@ -20,13 +20,13 @@ spring:
     password: ${DB_PASSWORD:root}
     hikari:
       pool-name: ridehailing-pool
-      maximum-pool-size: ${DB_POOL_SIZE:20}
-      minimum-idle: ${DB_POOL_MIN_IDLE:5}
+      maximum-pool-size: ${DB_POOL_SIZE:5}
+      minimum-idle: ${DB_POOL_MIN_IDLE:2}
       connection-timeout: 10000
 
   jpa:
     open-in-view: false
-    show-sql: ${SHOW_SQL:true}
+    show-sql: ${SHOW_SQL:false}
     hibernate:
       # Flyway is the single source of truth for schema. Hibernate never touches DDL.
       # Do not set this to update: Hibernate cannot create the module schemas
@@ -52,20 +52,17 @@ spring:
 
   data:
     redis:
-      host: ${REDIS_HOST:brightstromvalkey-shuklasaubhagya795-a968.d.aivencloud.com}
-      port: ${REDIS_PORT:23464}
-      # Managed Valkey/Redis authenticates a named user over TLS; both are off locally.
-      username: ${REDIS_USERNAME:default}
-      password: ${REDIS_PASSWORD:AVNS_Lb0Fm_gxUQrOqGyrTl7}
+      url: ${REDIS_URL:redis://localhost:6379}
       ssl:
-        enabled: ${REDIS_SSL:true}
-      timeout: 2s
+        enabled: ${REDIS_SSL:false}
+      timeout: ${REDIS_TIMEOUT:10s}
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:10s}
       lettuce:
         pool:
           enabled: true
-          max-active: ${REDIS_POOL_MAX:16}
-          max-idle: ${REDIS_POOL_MAX_IDLE:8}
-          min-idle: ${REDIS_POOL_MIN_IDLE:2}
+          max-active: ${REDIS_POOL_MAX:4}
+          max-idle: ${REDIS_POOL_MAX_IDLE:2}
+          min-idle: ${REDIS_POOL_MIN_IDLE:1}
 
   jackson:
     default-property-inclusion: non_null

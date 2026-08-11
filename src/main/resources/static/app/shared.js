@@ -6,17 +6,21 @@ const RH = (() => {
     ? location.origin + "/api/v1"
     : "http://localhost:8080/api/v1";
 
+  // Base URL is shared across tabs; the session is not, so one browser can hold a rider,
+  // a driver and an admin at once - sessionStorage is per tab, localStorage is per origin.
   const get = (k, d = "") => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
   const put = (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} };
+  const sget = (k, d = "") => { try { return sessionStorage.getItem(k) ?? d; } catch { return d; } };
+  const sput = (k, v) => { try { v === null ? sessionStorage.removeItem(k) : sessionStorage.setItem(k, v); } catch {} };
 
   const baseUrl = () => (get(K_URL) || DEFAULT_BASE).replace(/\/+$/, "");
   const setBaseUrl = (v) => put(K_URL, (v || "").trim().replace(/\/+$/, ""));
-  const token = () => get(K_TOK) || null;
-  const role = () => get(K_ROLE) || null;
-  const email = () => get(K_EMAIL) || null;
+  const token = () => sget(K_TOK) || null;
+  const role = () => sget(K_ROLE) || null;
+  const email = () => sget(K_EMAIL) || null;
 
-  function session(tok, r, em) { put(K_TOK, tok); put(K_ROLE, r); put(K_EMAIL, em); }
-  function logout() { put(K_TOK, null); put(K_ROLE, null); put(K_EMAIL, null); }
+  function session(tok, r, em) { sput(K_TOK, tok); sput(K_ROLE, r); sput(K_EMAIL, em); }
+  function logout() { sput(K_TOK, null); sput(K_ROLE, null); sput(K_EMAIL, null); }
 
   // Read only; the server re-checks every call, so this never grants anything.
   function roleFromJwt(jwt) {
