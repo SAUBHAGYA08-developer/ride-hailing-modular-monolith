@@ -52,13 +52,13 @@ spring:
 
   data:
     redis:
-      host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
+      host: ${REDIS_HOST:brightstromvalkey-shuklasaubhagya795-a968.d.aivencloud.com}
+      port: ${REDIS_PORT:23464}
       # Managed Valkey/Redis authenticates a named user over TLS; both are off locally.
-      username: ${REDIS_USERNAME:}
-      password: ${REDIS_PASSWORD:}
+      username: ${REDIS_USERNAME:default}
+      password: ${REDIS_PASSWORD:AVNS_Lb0Fm_gxUQrOqGyrTl7}
       ssl:
-        enabled: ${REDIS_SSL:false}
+        enabled: ${REDIS_SSL:true}
       timeout: 2s
       lettuce:
         pool:

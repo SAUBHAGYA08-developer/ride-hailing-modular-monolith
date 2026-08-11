@@ -30,5 +30,9 @@ public record FleetDriverResponse(
         int totalRides,
         boolean reportingLocation,
         boolean bookable,
+        // Live from Redis; null when the driver is not reporting.
+        BigDecimal liveLatitude,
+        BigDecimal liveLongitude,
+        // MySQL recovery snapshot, written at go-online and ride-end only, so it lags a live position.
         Instant lastLocationAt) {
 }

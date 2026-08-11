@@ -14,9 +14,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.geo.Point;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -58,7 +61,8 @@ public class DriverFleetService {
     public FleetSnapshotResponse snapshot(DriverStatus status, Pageable pageable) {
         // Redis is read exactly once and the same live set feeds the summary and
         // every row, so the totals can never contradict the flags beside them.
-        Set<Long> liveDriverIds = driverLocationService.liveDriverIds();
+        Map<Long, Point> livePositions = driverLocationService.livePositions();
+        Set<Long> liveDriverIds = livePositions.keySet();
 
         Page<Driver> page = status == null
                 ? driverRepository.findAllByOrderByIdAsc(pageable)
@@ -74,7 +78,7 @@ public class DriverFleetService {
 
         return new FleetSnapshotResponse(
                 summary(liveDriverIds, bookableIds.size()),
-                PageResponse.from(page, driver -> toRow(driver, liveDriverIds, bookableIds, carTypes)));
+                PageResponse.from(page, driver -> toRow(driver, livePositions, bookableIds, carTypes)));
     }
 
     private FleetSummaryResponse summary(Set<Long> liveDriverIds, long bookable) {
@@ -131,9 +135,11 @@ public class DriverFleetService {
      * headcount needs no personal data, so the endpoint never carries any.
      */
     private FleetDriverResponse toRow(Driver driver,
-                                      Set<Long> liveDriverIds,
+                                      Map<Long, Point> livePositions,
                                       Set<Long> bookableIds,
                                       Map<Long, List<CarType>> carTypes) {
+        // Redis orders a Point as (x = longitude, y = latitude), the reverse of how they are quoted elsewhere.
+        Point position = livePositions.get(driver.getId());
         return new FleetDriverResponse(
                 driver.getId(),
                 driver.getFullName(),
@@ -141,8 +147,10 @@ public class DriverFleetService {
                 carTypes.getOrDefault(driver.getId(), List.of()),
                 driver.getRating(),
                 driver.getTotalRides(),
-                liveDriverIds.contains(driver.getId()),
+                position != null,
                 bookableIds.contains(driver.getId()),
+                position == null ? null : BigDecimal.valueOf(position.getY()).setScale(6, RoundingMode.HALF_UP),
+                position == null ? null : BigDecimal.valueOf(position.getX()).setScale(6, RoundingMode.HALF_UP),
                 driver.getLastLocationAt());
     }
 }

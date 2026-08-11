@@ -17,9 +17,9 @@ RUN useradd -r -u 1001 -m spring
 COPY --from=build /build/target/*.jar /app/app.jar
 USER spring
 
-# Overridden by the platform when it injects its own port; the app reads SERVER_PORT.
-ENV SERVER_PORT=8080
-EXPOSE 8080
+# Matches Render's default; a platform-injected PORT still wins over this.
+ENV SERVER_PORT=10000
+EXPOSE 10000
 
 # Sized for a 512Mi container: heap, metaspace and thread stacks must all fit, not just the heap.
 # SerialGC because G1's region bookkeeping is wasted overhead on a heap this small.

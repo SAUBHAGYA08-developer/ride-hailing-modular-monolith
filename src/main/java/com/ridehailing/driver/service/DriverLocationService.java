@@ -23,8 +23,10 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -163,6 +165,29 @@ public class DriverLocationService {
             live.add(driverId);
         }
         return live;
+    }
+
+    /** Live coordinates for the fresh members, for the operator fleet view only. */
+    public Map<Long, Point> livePositions() {
+        Set<Long> live = liveDriverIds();
+        if (live.isEmpty()) {
+            return Map.of();
+        }
+        List<Long> ids = new ArrayList<>(live);
+        String[] members = ids.stream().map(this::member).toArray(String[]::new);
+        List<Point> points = redis.opsForGeo().position(RedisKeys.DRIVER_GEO_SET, members);
+        if (points == null || points.size() != ids.size()) {
+            log.warn("GEOPOS for {} live members returned nothing usable", ids.size());
+            return Map.of();
+        }
+        Map<Long, Point> positions = new LinkedHashMap<>(ids.size());
+        for (int index = 0; index < ids.size(); index++) {
+            // A null means the member vanished between the two calls, which is not an error.
+            if (points.get(index) != null) {
+                positions.put(ids.get(index), points.get(index));
+            }
+        }
+        return positions;
     }
 
     public void removeLocation(Long driverId) {

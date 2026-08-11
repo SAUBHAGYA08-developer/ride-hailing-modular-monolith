@@ -40,6 +40,7 @@
         <b>Read the gap, not the totals.</b> <span class="mono">byStatus</span> is what MySQL reserved;
         <span class="mono">reportingLocation</span> is who still has a fresh position in the Redis GEO set.
         A driver on duty whose last ping is older than the TTL is a ghost — MySQL calls them AVAILABLE, dispatch cannot see them, and they will never be matched.
+        Coordinates are the live Redis position. Snapshot is the MySQL recovery copy, written only at go-online and ride-end, so it lags a moving driver by design.
         <span class="mono">bookable</span> (AVAILABLE + live position + an active vehicle) is the only honest answer to "how many drivers can take a ride right now".
       </div>
       <div class="muted" style="font-size:12px; margin-top:6px">
@@ -51,7 +52,7 @@
     <div class="card">
       <h2>Drivers</h2>
       <div class="scroll"><table>
-        <thead><tr><th>ID</th><th>Name</th><th>Status</th><th>Car types</th><th>Rating</th><th>Rides</th><th>Live position</th><th>Bookable</th><th>Last location</th></tr></thead>
+        <thead><tr><th>ID</th><th>Name</th><th>Status</th><th>Car types</th><th>Rating</th><th>Rides</th><th>Live position</th><th>Coordinates</th><th>Bookable</th><th>Snapshot</th></tr></thead>
         <tbody id="fleetRows"></tbody>
       </table></div>
       <div class="row" style="margin-top:8px">
@@ -325,10 +326,13 @@ function renderFleetRows(p) {
       <td>${RH.fmt(d.rating)}</td>
       <td>${d.totalRides}</td>
       <td><span class="pill ${d.reportingLocation ? "ok" : "bad"}">${d.reportingLocation ? "live" : "stale"}</span></td>
+      <td class="mono">${d.liveLatitude == null ? '<span class="muted">—</span>'
+        : `${RH.esc(d.liveLatitude)}, ${RH.esc(d.liveLongitude)}
+           <a href="https://www.google.com/maps?q=${encodeURIComponent(d.liveLatitude + "," + d.liveLongitude)}" target="_blank" rel="noreferrer noopener">map</a>`}</td>
       <td><span class="pill ${d.bookable ? "ok" : "bad"}">${d.bookable ? "yes" : "no"}</span>${
         d.status === "AVAILABLE" && !d.reportingLocation ? ' <span class="pill warn">ghost</span>' : ""}</td>
       <td class="muted mono">${RH.esc(RH.when(d.lastLocationAt))}</td>
-    </tr>`).join("") || `<tr><td colspan="9" class="muted">No drivers match this filter.</td></tr>`;
+    </tr>`).join("") || `<tr><td colspan="10" class="muted">No drivers match this filter.</td></tr>`;
   RH.$("fPageInfo").textContent = "page " + (p.page + 1) + " of " + Math.max(p.totalPages, 1) + " · " + p.totalElements + " drivers";
   RH.$("fPrev").disabled = p.page <= 0;
   RH.$("fNext").disabled = p.page + 1 >= p.totalPages;
