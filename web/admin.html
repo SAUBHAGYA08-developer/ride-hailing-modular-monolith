@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RideHailing · Admin</title>
+<link rel="stylesheet" href="shared.css">
+</head>
+<body>
+<div id="chrome"></div>
+<div class="wrap">
+
+  <div class="tabs">
+    <div class="tab active" data-tab="fleet">Fleet</div>
+    <div class="tab" data-tab="config">Configuration</div>
+    <div class="tab" data-tab="rules">Pricing rules</div>
+    <div class="tab" data-tab="zones">Pricing zones</div>
+    <div class="tab" data-tab="coupons">Coupons</div>
+    <div class="tab" data-tab="audit">Audit</div>
+  </div>
+
+  <div id="pane-fleet" class="pane active">
+    <div class="card">
+      <h2>Fleet</h2>
+      <div class="row">
+        <div class="field"><label>Status</label>
+          <select id="fStatus"><option value="">All</option><option>AVAILABLE</option><option>BUSY</option><option>OFFLINE</option></select>
+        </div>
+        <div class="field"><label>Page size</label><input id="fSize" class="tiny" type="number" min="1" max="100" value="20"></div>
+        <button id="fRefresh" class="primary">Refresh</button>
+        <label class="muted" style="display:flex; align-items:center; gap:6px">
+          <input id="fAuto" type="checkbox" style="min-width:auto"> auto-refresh 5s
+        </label>
+        <span class="grow"></span>
+        <span id="fTtl" class="pill muted">TTL —</span>
+      </div>
+      <div id="fleetBanner" class="banner"></div>
+      <div id="fleetTiles" class="tiles"></div>
+      <div class="muted" style="font-size:12px; margin-top:10px">
+        <b>Read the gap, not the totals.</b> <span class="mono">byStatus</span> is what MySQL reserved;
+        <span class="mono">reportingLocation</span> is who still has a fresh position in the Redis GEO set.
+        A driver on duty whose last ping is older than the TTL is a ghost — MySQL calls them AVAILABLE, dispatch cannot see them, and they will never be matched.
+        <span class="mono">bookable</span> (AVAILABLE + live position + an active vehicle) is the only honest answer to "how many drivers can take a ride right now".
+      </div>
+      <div class="muted" style="font-size:12px; margin-top:6px">
+        A 403 here is almost always a stale token: authorities are baked into the JWT at login, so an admin signed in before the
+        <span class="mono">DRIVER_FLEET_READ</span> migration ran carries a token without it. Log out and back in — no server change needed.
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Drivers</h2>
+      <div class="scroll"><table>
+        <thead><tr><th>ID</th><th>Name</th><th>Status</th><th>Car types</th><th>Rating</th><th>Rides</th><th>Live position</th><th>Bookable</th><th>Last location</th></tr></thead>
+        <tbody id="fleetRows"></tbody>
+      </table></div>
+      <div class="row" style="margin-top:8px">
+        <button id="fPrev" class="sm">Prev</button><button id="fNext" class="sm">Next</button>
+        <span id="fPageInfo" class="muted"></span>
+      </div>
+    </div>
+  </div>
+
+  <div id="pane-config" class="pane">
+    <div class="card">
+      <h2>Business configuration</h2>
+      <div class="row"><button id="cReload" class="sm">Reload</button></div>
+      <div id="configBanner" class="banner"></div>
+      <div class="muted" style="font-size:12px; margin-bottom:8px">
+        <span class="mono">payment.simulated.failure.methods</span> is a CSV of payment method names; every listed method declines on purpose.
+        That is how a FAILED payment is demonstrated deterministically — set it to <span class="mono">CARD</span>, pay a ride by card, watch it fail, then clear it.
+      </div>
+      <div class="scroll"><table>
+        <thead><tr><th>Key</th><th>Value</th><th>Type</th><th>Updated</th><th></th></tr></thead>
+        <tbody id="configRows"></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <div id="pane-rules" class="pane">
+    <div class="card">
+      <h2>Pricing rules</h2>
+      <div class="row"><button id="rReload" class="sm">Reload</button></div>
+      <div id="rulesBanner" class="banner"></div>
+      <div class="scroll"><table>
+        <thead><tr><th>ID</th><th>Code</th><th>Name</th><th>Min fare</th><th>Surge</th><th>Active</th><th>Tiers</th><th>Car type multipliers</th><th>Updated</th></tr></thead>
+        <tbody id="rulesRows"></tbody>
+      </table></div>
+    </div>
+
+    <div class="card">
+      <h2>Create a rule</h2>
+      <div class="muted" style="font-size:12px; margin-bottom:8px">
+        A car type with no multiplier is <b>not</b> rejected — the service falls back to 1.00, so a bike quietly prices as a sedan.
+        All four types are filled in below for exactly that reason. Tiers must start at 0 and leave no gap; the last one is open ended, so leave its <span class="mono">to km</span> blank.
+      </div>
+      <div class="row">
+        <div class="field"><label>Code</label><input id="nrCode" class="narrow" placeholder="STD_PUNE"></div>
+        <div class="field"><label>Name</label><input id="nrName" placeholder="Pune standard"></div>
+        <div class="field"><label>Minimum fare</label><input id="nrMin" class="tiny" type="number" step="0.01" value="50"></div>
+        <div class="field"><label>Surge (&ge; 1.0)</label><input id="nrSurge" class="tiny" type="number" step="0.01" value="1.00"></div>
+        <label class="muted" style="display:flex; align-items:center; gap:6px"><input id="nrActive" type="checkbox" checked style="min-width:auto"> active</label>
+      </div>
+      <div class="muted" style="font-size:11px; margin:6px 0">Distance tiers</div>
+      <div class="row">
+        <div class="field"><label>from km</label><input id="t1From" class="tiny" type="number" step="0.1" value="0"></div>
+        <div class="field"><label>to km</label><input id="t1To" class="tiny" type="number" step="0.1" value="5"></div>
+        <div class="field"><label>rate/km</label><input id="t1Rate" class="tiny" type="number" step="0.01" value="15"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>from km</label><input id="t2From" class="tiny" type="number" step="0.1" value="5"></div>
+        <div class="field"><label>to km</label><input id="t2To" class="tiny" type="number" step="0.1" value="15"></div>
+        <div class="field"><label>rate/km</label><input id="t2Rate" class="tiny" type="number" step="0.01" value="12"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>from km</label><input id="t3From" class="tiny" type="number" step="0.1" value="15"></div>
+        <div class="field"><label>to km (blank = open)</label><input id="t3To" class="tiny" type="number" step="0.1" placeholder="open"></div>
+        <div class="field"><label>rate/km</label><input id="t3Rate" class="tiny" type="number" step="0.01" value="10"></div>
+      </div>
+      <div class="muted" style="font-size:11px; margin:6px 0">Car type multipliers</div>
+      <div class="row">
+        <div class="field"><label>SEDAN</label><input id="mSEDAN" class="tiny" type="number" step="0.01" value="1.00"></div>
+        <div class="field"><label>HATCHBACK</label><input id="mHATCHBACK" class="tiny" type="number" step="0.01" value="0.90"></div>
+        <div class="field"><label>AUTO</label><input id="mAUTO" class="tiny" type="number" step="0.01" value="0.65"></div>
+        <div class="field"><label>BIKE</label><input id="mBIKE" class="tiny" type="number" step="0.01" value="0.45"></div>
+        <button id="rCreate" class="primary">Create rule</button>
+      </div>
+      <div id="ruleFormBanner" class="banner"></div>
+    </div>
+  </div>
+
+  <div id="pane-zones" class="pane">
+    <div class="card">
+      <h2>Pricing zones</h2>
+      <div class="row"><button id="zReload" class="sm">Reload</button></div>
+      <div id="zonesBanner" class="banner"></div>
+      <div class="muted" style="font-size:12px; margin-bottom:8px">
+        The <b>pickup</b> point picks the zone, never the drop — a ride out of Pune is priced by Pune's rule however far it ends up going.
+        Overlapping zones are settled by <span class="mono">priority</span>, highest first.
+      </div>
+      <div class="scroll"><table>
+        <thead><tr><th>ID</th><th>Code</th><th>Name</th><th>Rule</th><th>Centre</th><th>Radius km</th><th>Priority</th><th>Active</th><th>Updated</th></tr></thead>
+        <tbody id="zonesRows"></tbody>
+      </table></div>
+    </div>
+
+    <div class="card">
+      <h2>Create a zone</h2>
+      <div class="row">
+        <div class="field"><label>Code</label><input id="nzCode" class="narrow" placeholder="PUNE_CORE"></div>
+        <div class="field"><label>Name</label><input id="nzName" placeholder="Pune core"></div>
+        <div class="field"><label>Pricing rule code</label><input id="nzRule" class="narrow" placeholder="STD_PUNE"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Centre latitude</label><input id="nzLat" class="narrow" type="number" step="0.000001" value="18.5204"></div>
+        <div class="field"><label>Centre longitude</label><input id="nzLng" class="narrow" type="number" step="0.000001" value="73.8567"></div>
+        <div class="field"><label>Radius km</label><input id="nzRadius" class="tiny" type="number" step="0.1" value="25"></div>
+        <div class="field"><label>Priority</label><input id="nzPriority" class="tiny" type="number" value="10"></div>
+        <label class="muted" style="display:flex; align-items:center; gap:6px"><input id="nzActive" type="checkbox" checked style="min-width:auto"> active</label>
+        <button id="zCreate" class="primary">Create zone</button>
+      </div>
+      <div id="zoneFormBanner" class="banner"></div>
+    </div>
+  </div>
+
+  <div id="pane-coupons" class="pane">
+    <div class="card">
+      <h2>Create a coupon</h2>
+      <div class="muted" style="font-size:12px; margin-bottom:8px">
+        The API exposes no coupon listing — only create, deactivate and rider-side validate. To see what exists, filter the Audit tab by entity type
+        <span class="mono">Coupon</span>; created and status-changed rows carry the full payload.
+      </div>
+      <div class="row">
+        <div class="field"><label>Code</label><input id="ncCode" class="narrow" placeholder="FIRST50"></div>
+        <div class="field"><label>Description</label><input id="ncDesc" placeholder="Half off the first ride"></div>
+        <div class="field"><label>Discount type</label><select id="ncType"><option>PERCENTAGE</option><option>FLAT</option></select></div>
+        <div class="field"><label>Discount value</label><input id="ncValue" class="tiny" type="number" step="0.01" value="50"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Max discount</label><input id="ncMax" class="tiny" type="number" step="0.01" value="100"></div>
+        <div class="field"><label>Min ride amount</label><input id="ncMinRide" class="tiny" type="number" step="0.01" value="0"></div>
+        <div class="field"><label>Usage limit</label><input id="ncUsage" class="tiny" type="number" min="1" placeholder="none"></div>
+        <div class="field"><label>Per user limit</label><input id="ncPerUser" class="tiny" type="number" min="1" value="1"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Valid from</label><input id="ncFrom" type="datetime-local"></div>
+        <div class="field"><label>Valid until</label><input id="ncUntil" type="datetime-local"></div>
+        <button id="cCreate" class="primary">Create coupon</button>
+      </div>
+      <div id="couponBanner" class="banner"></div>
+      <div id="couponOut" class="kv" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card">
+      <h2>Deactivate</h2>
+      <div class="muted" style="font-size:12px; margin-bottom:8px">
+        Soft delete: the coupon moves to INACTIVE and stays readable, because past redemptions still reference it.
+      </div>
+      <div class="row">
+        <div class="field"><label>Coupon id</label><input id="cdId" class="tiny" type="number"></div>
+        <button id="cDeactivate">Deactivate</button>
+      </div>
+      <div id="couponDelBanner" class="banner"></div>
+    </div>
+  </div>
+
+  <div id="pane-audit" class="pane">
+    <div class="card">
+      <h2>Audit trail</h2>
+      <div class="row">
+        <div class="field"><label>Entity type</label>
+          <select id="aType"><option value="">All</option><option>Driver</option><option>Vehicle</option><option>Ride</option><option>Coupon</option><option>PricingRule</option><option>Configuration</option></select>
+        </div>
+        <div class="field"><label>Entity id</label><input id="aId" class="tiny"></div>
+        <div class="field"><label>Request id</label><input id="aReq" class="narrow"></div>
+        <div class="field"><label>Page size</label><input id="aSize" class="tiny" type="number" min="1" max="100" value="20"></div>
+        <button id="aSearch" class="primary">Search</button>
+      </div>
+      <div class="muted" style="font-size:12px; margin-bottom:8px">
+        Request id wins: fill it and the entity filters are ignored, which is how you pull every row a single request touched.
+      </div>
+      <div id="auditBanner" class="banner"></div>
+      <div class="scroll"><table>
+        <thead><tr><th>When</th><th>Entity</th><th>Id</th><th>Action</th><th>By</th><th>Old</th><th>New</th><th>Request</th></tr></thead>
+        <tbody id="auditRows"></tbody>
+      </table></div>
+      <div class="row" style="margin-top:8px">
+        <button id="aPrev" class="sm">Prev</button><button id="aNext" class="sm">Next</button>
+        <span id="aPageInfo" class="muted"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Requests</h2>
+    <div id="reqLog" class="mono"></div>
+  </div>
+</div>
+
+<script src="shared.js"></script>
+<script>
+RH.mountChrome("Admin");
+const ADMIN = RH.requireRole("ADMIN");
+
+const CAR_TYPES = ["SEDAN", "HATCHBACK", "AUTO", "BIKE"];
+const loaded = {};
+let fleetTimer = null;
+
+// Every write and every reload goes through here, so no button can be double fired.
+async function run(btn, bannerId, fn) {
+  const b = typeof btn === "string" ? RH.$(btn) : btn;
+  if (b) b.disabled = true;
+  try {
+    await fn();
+  } catch (e) {
+    RH.banner(bannerId, e.message + (e.code ? " (" + e.code + ")" : ""), "err");
+    throw e;
+  } finally {
+    if (b) b.disabled = false;
+  }
+}
+
+const num = (id) => { const v = RH.$(id).value.trim(); return v === "" ? null : Number(v); };
+const str = (id) => { const v = RH.$(id).value.trim(); return v === "" ? null : v; };
+const iso = (id) => { const v = RH.$(id).value; return v ? new Date(v).toISOString() : null; };
+const clip = (s, n) => { const t = String(s ?? ""); return t.length > n ? t.slice(0, n) + "…" : t; };
+
+function tile(label, n, alert) {
+  return `<div class="tile ${alert ? "alert" : ""}"><div class="n">${RH.esc(n)}</div><div class="k">${RH.esc(label)}</div></div>`;
+}
+
+function tabs(name) {
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
+  document.querySelectorAll(".pane").forEach(p => p.classList.toggle("active", p.id === "pane-" + name));
+  if (name !== "fleet") stopAuto();
+  if (!loaded[name]) { loaded[name] = true; (FIRST[name] || (() => {}))(); }
+}
+document.querySelectorAll(".tab").forEach(t => t.onclick = () => tabs(t.dataset.tab));
+
+/* ---------- Fleet ---------- */
+let fleetPage = 0;
+
+async function loadFleet() {
+  const status = RH.$("fStatus").value;
+  const size = Math.min(Math.max(+RH.$("fSize").value || 20, 1), 100);
+  const q = "/drivers/fleet?page=" + fleetPage + "&size=" + size + (status ? "&status=" + encodeURIComponent(status) : "");
+  let snap;
+  try {
+    snap = await RH.api(q);
+  } catch (e) {
+    stopAuto();
+    RH.$("fAuto").checked = false;
+    // A 403 here is a token minted before the fleet permission existed, not a server misconfiguration.
+    const hint = e.status === 403 ? " — your token predates the DRIVER_FLEET_READ migration; log out and sign in again." : "";
+    RH.banner("fleetBanner", e.message + hint, "err");
+    return;
+  }
+  RH.banner("fleetBanner", "");
+  renderFleetSummary(snap.summary);
+  renderFleetRows(snap.drivers);
+}
+
+function renderFleetSummary(s) {
+  const by = s.byStatus || {};
+  const ghosts = s.onDutyWithoutLiveLocation;
+  RH.$("fTtl").textContent = "location TTL " + s.locationTtlSeconds + "s";
+  RH.$("fleetTiles").innerHTML =
+    tile("total drivers", s.totalDrivers) +
+    tile("available", by.AVAILABLE ?? 0) +
+    tile("busy", by.BUSY ?? 0) +
+    tile("offline", by.OFFLINE ?? 0) +
+    tile("reporting location", s.reportingLocation) +
+    tile("on duty, no live location", ghosts, ghosts > 0) +
+    tile("bookable now", s.bookable);
+}
+
+function renderFleetRows(p) {
+  const statusPill = (st) => st === "AVAILABLE" ? "ok" : st === "BUSY" ? "warn" : "";
+  RH.$("fleetRows").innerHTML = (p.items || []).map(d => `
+    <tr>
+      <td class="mono">${d.driverId}</td>
+      <td>${RH.esc(d.fullName)}</td>
+      <td><span class="pill ${statusPill(d.status)}">${RH.esc(d.status)}</span></td>
+      <td class="mono">${RH.esc((d.activeCarTypes || []).join(", ") || "none")}</td>
+      <td>${RH.fmt(d.rating)}</td>
+      <td>${d.totalRides}</td>
+      <td><span class="pill ${d.reportingLocation ? "ok" : "bad"}">${d.reportingLocation ? "live" : "stale"}</span></td>
+      <td><span class="pill ${d.bookable ? "ok" : "bad"}">${d.bookable ? "yes" : "no"}</span>${
+        d.status === "AVAILABLE" && !d.reportingLocation ? ' <span class="pill warn">ghost</span>' : ""}</td>
+      <td class="muted mono">${RH.esc(RH.when(d.lastLocationAt))}</td>
+    </tr>`).join("") || `<tr><td colspan="9" class="muted">No drivers match this filter.</td></tr>`;
+  RH.$("fPageInfo").textContent = "page " + (p.page + 1) + " of " + Math.max(p.totalPages, 1) + " · " + p.totalElements + " drivers";
+  RH.$("fPrev").disabled = p.page <= 0;
+  RH.$("fNext").disabled = p.page + 1 >= p.totalPages;
+}
+
+function stopAuto() { if (fleetTimer) { clearInterval(fleetTimer); fleetTimer = null; } }
+function startAuto() { stopAuto(); fleetTimer = setInterval(() => { if (!document.hidden) loadFleet(); }, 5000); }
+
+RH.$("fRefresh").onclick = () => run("fRefresh", "fleetBanner", loadFleet).catch(() => {});
+RH.$("fStatus").onchange = () => { fleetPage = 0; loadFleet(); };
+RH.$("fSize").onchange = () => { fleetPage = 0; loadFleet(); };
+RH.$("fPrev").onclick = () => { if (fleetPage > 0) { fleetPage--; loadFleet(); } };
+RH.$("fNext").onclick = () => { fleetPage++; loadFleet(); };
+RH.$("fAuto").onchange = () => RH.$("fAuto").checked ? startAuto() : stopAuto();
+// A hidden tab must not keep polling; resume only if the toggle is still on.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) stopAuto();
+  else if (RH.$("fAuto").checked) { loadFleet(); startAuto(); }
+});
+
+/* ---------- Configuration ---------- */
+let configs = [];
+
+async function loadConfig() {
+  configs = await RH.api("/configurations");
+  RH.$("configRows").innerHTML = configs.map((c, i) => `
+    <tr>
+      <td class="mono">${RH.esc(c.key)}<div class="muted" style="font-size:11px">${RH.esc(c.description || "")}</div></td>
+      <td><input class="narrow mono" id="cfgv${i}" value="${RH.esc(c.value)}" ${c.editable ? "" : "disabled"}></td>
+      <td class="muted mono">${RH.esc(c.valueType)}</td>
+      <td class="muted mono">${RH.esc(RH.when(c.updatedAt))}<div>${RH.esc(c.updatedBy || "")}</div></td>
+      <td>${c.editable ? `<button class="sm" data-cfg="${i}">Save</button>` : '<span class="pill">locked</span>'}</td>
+    </tr>`).join("") || `<tr><td colspan="5" class="muted">No configuration rows.</td></tr>`;
+  document.querySelectorAll("[data-cfg]").forEach(b => b.onclick = () => saveConfig(b, +b.dataset.cfg));
+}
+
+function saveConfig(btn, i) {
+  const c = configs[i];
+  const value = RH.$("cfgv" + i).value;
+  run(btn, "configBanner", async () => {
+    const updated = await RH.api("/configurations/" + encodeURIComponent(c.key), { method: "PUT", body: { value } });
+    configs[i] = updated;
+    RH.banner("configBanner", c.key + " = " + updated.value, "ok");
+  }).catch(() => {});
+}
+
+RH.$("cReload").onclick = () => run("cReload", "configBanner", loadConfig).catch(() => {});
+
+/* ---------- Pricing rules ---------- */
+async function loadRules() {
+  const rules = await RH.api("/pricing/rules");
+  RH.$("rulesRows").innerHTML = rules.map(r => {
+    const have = (r.carTypeMultipliers || []).map(m => m.carType);
+    const missing = CAR_TYPES.filter(t => !have.includes(t));
+    const mult = (r.carTypeMultipliers || []).map(m => `${m.carType} ${RH.fmt(m.multiplier)}`).join(", ");
+    const gap = missing.length ? ` <span class="pill bad">${missing.join(", ")} → 1.00</span>` : "";
+    const tiers = (r.tiers || []).map(t => `${RH.fmt(t.fromKm)}–${t.toKm === null || t.toKm === undefined ? "∞" : RH.fmt(t.toKm)}km @ ${RH.fmt(t.ratePerKm)}`).join("; ");
+    return `<tr>
+      <td class="mono">${r.id}</td>
+      <td class="mono">${RH.esc(r.code)}</td>
+      <td>${RH.esc(r.name)}</td>
+      <td>${RH.fmt(r.minimumFare)}</td>
+      <td>${RH.fmt(r.surgeMultiplier)}</td>
+      <td><span class="pill ${r.active ? "ok" : "bad"}">${r.active ? "active" : "inactive"}</span></td>
+      <td class="mono">${RH.esc(tiers)}</td>
+      <td class="mono">${RH.esc(mult)}${gap}</td>
+      <td class="muted mono">${RH.esc(RH.when(r.updatedAt))}<div>${RH.esc(r.updatedBy || "")}</div></td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="9" class="muted">No pricing rules.</td></tr>`;
+}
+
+function tierRows() {
+  return [["t1From", "t1To", "t1Rate"], ["t2From", "t2To", "t2Rate"], ["t3From", "t3To", "t3Rate"]]
+    .map(([f, t, r]) => ({ fromKm: num(f), toKm: num(t), ratePerKm: num(r) }))
+    .filter(t => t.fromKm !== null && t.ratePerKm !== null);
+}
+
+RH.$("rCreate").onclick = () => run("rCreate", "ruleFormBanner", async () => {
+  const body = {
+    code: str("nrCode"), name: str("nrName"),
+    minimumFare: num("nrMin"), surgeMultiplier: num("nrSurge"),
+    active: RH.$("nrActive").checked,
+    tiers: tierRows(),
+    carTypeMultipliers: CAR_TYPES.map(t => ({ carType: t, multiplier: num("m" + t) })).filter(m => m.multiplier !== null),
+  };
+  const created = await RH.api("/pricing/rules", { method: "POST", body });
+  RH.banner("ruleFormBanner", "Created rule " + created.code + " (id " + created.id + ").", "ok");
+  await loadRules();
+}).catch(() => {});
+
+RH.$("rReload").onclick = () => run("rReload", "rulesBanner", loadRules).catch(() => {});
+
+/* ---------- Pricing zones ---------- */
+async function loadZones() {
+  const zones = await RH.api("/pricing/zones");
+  RH.$("zonesRows").innerHTML = zones.map(z => `
+    <tr>
+      <td class="mono">${z.id}</td>
+      <td class="mono">${RH.esc(z.code)}</td>
+      <td>${RH.esc(z.name)}</td>
+      <td class="mono">${RH.esc(z.pricingRuleCode)}</td>
+      <td class="mono">${RH.esc(z.centreLatitude)}, ${RH.esc(z.centreLongitude)}</td>
+      <td>${RH.fmt(z.radiusKm)}</td>
+      <td>${z.priority}</td>
+      <td><span class="pill ${z.active ? "ok" : "bad"}">${z.active ? "active" : "inactive"}</span></td>
+      <td class="muted mono">${RH.esc(RH.when(z.updatedAt))}<div>${RH.esc(z.updatedBy || "")}</div></td>
+    </tr>`).join("") || `<tr><td colspan="9" class="muted">No pricing zones.</td></tr>`;
+}
+
+RH.$("zCreate").onclick = () => run("zCreate", "zoneFormBanner", async () => {
+  const body = {
+    code: str("nzCode"), name: str("nzName"), pricingRuleCode: str("nzRule"),
+    centreLatitude: num("nzLat"), centreLongitude: num("nzLng"),
+    radiusKm: num("nzRadius"), priority: num("nzPriority") ?? 0,
+    active: RH.$("nzActive").checked,
+  };
+  const created = await RH.api("/pricing/zones", { method: "POST", body });
+  RH.banner("zoneFormBanner", "Created zone " + created.code + " → rule " + created.pricingRuleCode + ".", "ok");
+  await loadZones();
+}).catch(() => {});
+
+RH.$("zReload").onclick = () => run("zReload", "zonesBanner", loadZones).catch(() => {});
+
+/* ---------- Coupons ---------- */
+RH.$("cCreate").onclick = () => run("cCreate", "couponBanner", async () => {
+  const body = {
+    code: str("ncCode"), description: str("ncDesc"),
+    discountType: RH.$("ncType").value, discountValue: num("ncValue"),
+    maxDiscountAmount: num("ncMax"), minRideAmount: num("ncMinRide") ?? 0,
+    validFrom: iso("ncFrom"), validUntil: iso("ncUntil"),
+    usageLimit: num("ncUsage"), perUserLimit: num("ncPerUser"),
+  };
+  const c = await RH.api("/coupons", { method: "POST", body });
+  RH.banner("couponBanner", "Created coupon " + c.code + " (id " + c.id + ").", "ok");
+  RH.$("couponOut").innerHTML = [
+    ["id", c.id], ["code", c.code], ["type", c.discountType], ["value", RH.fmt(c.discountValue)],
+    ["max discount", RH.fmt(c.maxDiscountAmount)], ["min ride", RH.fmt(c.minRideAmount)],
+    ["status", c.status], ["valid from", RH.when(c.validFrom)], ["valid until", RH.when(c.validUntil)],
+    ["usage limit", c.usageLimit ?? "unlimited"], ["per user", c.perUserLimit ?? "unlimited"], ["used", c.usedCount],
+  ].map(([k, v]) => `<div class="k">${RH.esc(k)}</div><div class="mono">${RH.esc(v)}</div>`).join("");
+}).catch(() => {});
+
+RH.$("cDeactivate").onclick = () => run("cDeactivate", "couponDelBanner", async () => {
+  const id = num("cdId");
+  if (id === null) return RH.banner("couponDelBanner", "Enter the coupon id.", "err");
+  await RH.api("/coupons/" + id, { method: "DELETE" });
+  RH.banner("couponDelBanner", "Coupon " + id + " is now INACTIVE.", "ok");
+}).catch(() => {});
+
+/* ---------- Audit ---------- */
+let auditPage = 0;
+
+async function loadAudit() {
+  const size = Math.min(Math.max(+RH.$("aSize").value || 20, 1), 100);
+  const p = new URLSearchParams({ page: auditPage, size });
+  const type = RH.$("aType").value, id = str("aId"), req = str("aReq");
+  if (type) p.set("entityType", type);
+  if (id) p.set("entityId", id);
+  if (req) p.set("requestId", req);
+  const page = await RH.api("/admin/audit-logs?" + p.toString());
+  RH.$("auditRows").innerHTML = (page.items || []).map(a => `
+    <tr>
+      <td class="muted mono">${RH.esc(RH.when(a.changedAt))}</td>
+      <td>${RH.esc(a.entityType)}</td>
+      <td class="mono">${RH.esc(a.entityId)}</td>
+      <td class="mono">${RH.esc(a.action)}</td>
+      <td class="muted">${RH.esc(a.changedBy || "")}</td>
+      <td class="mono muted" title="${RH.esc(a.oldValue || "")}">${RH.esc(clip(a.oldValue, 60))}</td>
+      <td class="mono" title="${RH.esc(a.newValue || "")}">${RH.esc(clip(a.newValue, 60))}</td>
+      <td class="mono muted">${RH.esc(clip(a.requestId, 12))}</td>
+    </tr>`).join("") || `<tr><td colspan="8" class="muted">No audit rows match.</td></tr>`;
+  RH.$("aPageInfo").textContent = "page " + (page.page + 1) + " of " + Math.max(page.totalPages, 1) + " · " + page.totalElements + " rows";
+  RH.$("aPrev").disabled = page.page <= 0;
+  RH.$("aNext").disabled = page.page + 1 >= page.totalPages;
+}
+
+RH.$("aSearch").onclick = () => { auditPage = 0; run("aSearch", "auditBanner", loadAudit).catch(() => {}); };
+RH.$("aPrev").onclick = () => { if (auditPage > 0) { auditPage--; run("aPrev", "auditBanner", loadAudit).catch(() => {}); } };
+RH.$("aNext").onclick = () => { auditPage++; run("aNext", "auditBanner", loadAudit).catch(() => {}); };
+
+// Each tab loads once on first open; Refresh and Reload are the only other reads.
+const FIRST = {
+  fleet: () => loadFleet(),
+  config: () => run("cReload", "configBanner", loadConfig).catch(() => {}),
+  rules: () => run("rReload", "rulesBanner", loadRules).catch(() => {}),
+  zones: () => run("zReload", "zonesBanner", loadZones).catch(() => {}),
+  coupons: () => {},
+  audit: () => run("aSearch", "auditBanner", loadAudit).catch(() => {}),
+};
+
+if (ADMIN) { loaded.fleet = true; loadFleet(); }
+</script>
+</body>
+</html>

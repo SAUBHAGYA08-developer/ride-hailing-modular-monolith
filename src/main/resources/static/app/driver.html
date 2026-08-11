@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RideHailing · Driver</title>
+<link rel="stylesheet" href="shared.css">
+</head>
+<body>
+<div id="chrome"></div>
+<div class="wrap">
+
+  <div class="card">
+    <h2>Driver</h2>
+    <div class="row">
+      <div class="field"><label>Driver id</label><input id="driverId" class="tiny" value="1"></div>
+      <button id="btnResolve" class="sm">Resolve</button>
+      <button id="btnProfile" class="sm">Load profile</button>
+      <span id="statusPill" class="pill">unknown</span>
+      <div class="grow"></div>
+      <button id="btnOnline" class="primary">Go online</button>
+      <button id="btnOffline">Go offline</button>
+    </div>
+    <div class="muted" style="font-size:12px">
+      The driver id is not the token subject — that is the user id. Resolve probes
+      <span class="mono">/drivers/{id}</span> for the one this token owns. Seeded demo drivers are 1–4, 9 and 10.
+    </div>
+    <div id="profile" class="kv" style="margin-top:10px"></div>
+    <div id="driverBanner" class="banner"></div>
+  </div>
+
+  <div class="card">
+    <h2>Presence</h2>
+    <div class="row">
+      <div class="field"><label>Latitude</label><input id="lat" class="narrow" value="12.9716"></div>
+      <div class="field"><label>Longitude</label><input id="lng" class="narrow" value="77.5946"></div>
+      <button id="btnPing" class="sm">Ping now</button>
+      <button id="btnMgRoad" class="sm">Jump to MG Road pickup</button>
+      <div class="field"><label>Auto-ping</label>
+        <select id="pingEvery">
+          <option value="10">every 10s</option>
+          <option value="20" selected>every 20s</option>
+          <option value="30">every 30s</option>
+        </select></div>
+      <button id="btnAuto">Start auto-ping</button>
+      <div class="field"><label>TTL (s)</label><input id="ttl" class="tiny" value="60"></div>
+      <span id="freshPill" class="pill">never pinged</span>
+    </div>
+    <div class="muted" style="font-size:12px">
+      A position lives in Redis behind a freshness key of <span class="mono">driver.location.ttl.seconds</span>
+      (default 60): once it lapses, matching evicts you and cannot dispatch you even while MySQL still says AVAILABLE.
+    </div>
+    <div id="pingBanner" class="banner"></div>
+  </div>
+
+  <div class="card">
+    <h2>My rides</h2>
+    <div class="row">
+      <button id="btnRides" class="sm">Refresh</button>
+      <button id="btnPrev" class="sm">Prev</button>
+      <button id="btnNext" class="sm">Next</button>
+      <div class="field"><label>Size</label><input id="size" class="tiny" value="10"></div>
+      <span id="pageInfo" class="muted">—</span>
+      <div class="grow"></div>
+      <span id="pollPill" class="pill">not polling</span>
+    </div>
+    <div class="row">
+      <div class="field"><label>Payment method — used by Complete and Retry</label>
+        <select id="method">
+          <option value="CASH" selected>CASH</option>
+          <option value="UPI">UPI</option>
+          <option value="CARD">CARD</option>
+          <option value="WALLET">WALLET</option>
+          <option value="NETBANKING">NETBANKING</option>
+        </select></div>
+      <div class="field grow" style="min-width:220px"><label>Cancellation reason</label>
+        <input id="reason" value="Driver could not reach the pickup"></div>
+    </div>
+    <div class="scroll"><table>
+      <thead><tr><th>Ride</th><th>Status</th><th>Car</th><th>Km</th><th>Fare</th><th>Fee</th><th>Payment</th><th>Actions</th></tr></thead>
+      <tbody id="rideRows"></tbody>
+    </table></div>
+    <div class="muted" style="font-size:12px; margin-top:8px">
+      The backend has no push channel, so a live ride is polled every 4s — never faster, never while the tab is hidden, never once it is terminal.
+    </div>
+    <div id="rideBanner" class="banner"></div>
+  </div>
+
+  <div class="card">
+    <h2>Payments</h2>
+    <div class="row">
+      <div class="field"><label>Ride id</label><input id="payRide" class="tiny"></div>
+      <button id="btnPayments" class="sm">Load</button>
+      <button id="btnRetry" class="sm">Retry failed payment</button>
+    </div>
+    <div id="paymentRows"></div>
+    <div class="muted" style="font-size:12px">
+      A retry re-collects a declined fare with the method selected above; one that already succeeded answers PAYMENT_ALREADY_SETTLED.
+    </div>
+    <div id="payBanner" class="banner"></div>
+  </div>
+
+  <div class="card">
+    <h2>Demo</h2>
+    <div class="row">
+      <button id="btnDemo" class="primary">Go online, ping, report what a rider sees</button>
+    </div>
+    <pre id="demoOut" class="mono" style="margin:0; white-space:pre-wrap"></pre>
+  </div>
+
+  <div class="card">
+    <h2>Requests</h2>
+    <div id="reqLog" class="mono"></div>
+  </div>
+</div>
+
+<script src="shared.js"></script>
+<script>
+(function () {
+  RH.mountChrome("Driver");
+  if (!RH.requireRole("DRIVER")) return;
+
+  const $ = RH.$, esc = RH.esc, fmt = RH.fmt;
+  const MG_ROAD = { lat: "12.9716", lng: "77.5946" };
+  const POLL_MS = 4000, MIN_PING_MS = 5000, PROBE_MAX_ID = 12;
+  const LIVE = ["DRIVER_ASSIGNED", "STARTED"];
+
+  const st = { busy: false, status: null, lastPing: 0, autoWanted: false,
+               autoTimer: null, pollTimer: null, page: 0, totalPages: 1, active: null };
+
+  const driverId = () => String($("driverId").value).trim();
+
+  // The codes a driver actually hits, said in words rather than as a raw enum.
+  function explain(e) {
+    if (e.code === "DRIVER_HAS_ACTIVE_RIDE")
+      return "You are BUSY on a ride, so you cannot go offline. BUSY is owned by ride assignment and is never set or cleared from here — complete or cancel the ride first.";
+    if (e.code === "PAYMENT_ALREADY_SETTLED") return "That fare already collected successfully — there is nothing to retry.";
+    if (e.code === "ACCESS_DENIED") return "This token does not own driver " + driverId() + " — press Resolve to find the id it does own.";
+    if (e.code === "DRIVER_NOT_FOUND") return "No driver " + driverId() + " exists. Seeded demo drivers are 1–4, 9 and 10.";
+    if (e.status === 429) return "Rate limited — location pings are capped (60 a minute by default). Choose a slower auto-ping interval.";
+    return e.message;
+  }
+
+  // One in-flight write at a time: two overlapping calls against the same driver is never what was meant.
+  async function guard(bannerId, fn) {
+    if (st.busy) return;
+    st.busy = true;
+    setBusy(true);
+    RH.banner(bannerId, "");
+    try {
+      return await fn();
+    } catch (e) {
+      RH.banner(bannerId, explain(e), "err");
+    } finally {
+      st.busy = false;
+      setBusy(false);
+    }
+  }
+  const setBusy = (on) => document.querySelectorAll(".wrap button").forEach(b => { b.disabled = on; });
+
+  /* ------------------------------ profile ------------------------------ */
+
+  function renderProfile(d) {
+    st.status = d.status;
+    const pill = $("statusPill");
+    pill.className = "pill " + (d.status === "AVAILABLE" ? "ok" : d.status === "BUSY" ? "warn" : "");
+    pill.textContent = d.status;
+    $("profile").innerHTML =
+      '<span class="k">driver</span><span>' + esc(d.fullName) + ' <span class="muted mono">· id ' + d.id + ' · userId ' + d.userId + '</span></span>' +
+      '<span class="k">status</span><span>' + esc(d.status) + '</span>' +
+      '<span class="k">licence</span><span class="mono">' + esc(d.licenseNumber) + '</span>' +
+      '<span class="k">rating</span><span>' + fmt(d.rating) + '</span>' +
+      '<span class="k">total rides</span><span>' + d.totalRides + '</span>' +
+      '<span class="k">phone</span><span class="mono">' + esc(d.phone) + '</span>';
+    return d;
+  }
+
+  const loadProfile = () => RH.api("/drivers/" + driverId()).then(renderProfile);
+
+  $("btnProfile").onclick = () => guard("driverBanner", loadProfile);
+
+  // Ownership is decided server side, so the only honest probe is to ask for each id and keep the one that answers.
+  async function resolveOwned() {
+    RH.banner("driverBanner", "Probing driver ids 1–" + PROBE_MAX_ID + " …", "info");
+    for (let id = 1; id <= PROBE_MAX_ID; id++) {
+      try {
+        const d = await RH.api("/drivers/" + id);
+        $("driverId").value = id;
+        renderProfile(d);
+        RH.banner("driverBanner", "This token owns driver " + id + ".", "ok");
+        return d;
+      } catch (e) {
+        if (e.code !== "ACCESS_DENIED" && e.code !== "DRIVER_NOT_FOUND") throw e;
+      }
+    }
+    RH.banner("driverBanner", "No driver id in 1–" + PROBE_MAX_ID + " belongs to this token.", "err");
+    return null;
+  }
+
+  $("btnResolve").onclick = () => guard("driverBanner", resolveOwned);
+
+  const setStatus = (status) => RH.api("/drivers/" + driverId() + "/status", { method: "PUT", body: { status } });
+
+  $("btnOnline").onclick = () => guard("driverBanner", async () => {
+    renderProfile(await setStatus("AVAILABLE"));
+    RH.banner("driverBanner", "AVAILABLE in MySQL — you are still invisible to matching until a position is pinged.", "ok");
+  });
+
+  $("btnOffline").onclick = () => guard("driverBanner", async () => {
+    renderProfile(await setStatus("OFFLINE"));
+    stopAuto();
+    RH.banner("driverBanner", "OFFLINE — the Redis position was dropped and auto-ping stopped.", "ok");
+  });
+
+  /* ------------------------------ presence ----------------------------- */
+
+  const pingOnce = () => RH.api("/drivers/" + driverId() + "/location", { method: "PUT",
+    body: { latitude: Number($("lat").value), longitude: Number($("lng").value) } })
+    .then(() => { st.lastPing = Date.now(); tick(); });
+
+  $("btnPing").onclick = () => guard("pingBanner", async () => {
+    await pingOnce();
+    RH.banner("pingBanner", "Position accepted — fresh for the next " + ttlSeconds() + "s.", "ok");
+  });
+
+  $("btnMgRoad").onclick = () => guard("pingBanner", async () => {
+    $("lat").value = MG_ROAD.lat;
+    $("lng").value = MG_ROAD.lng;
+    await pingOnce();
+    RH.banner("pingBanner", "Parked at the MG Road demo pickup — a rider booking from there can now match you.", "ok");
+  });
+
+  const ttlSeconds = () => Math.max(5, Number($("ttl").value) || 60);
+
+  // Local only: this redraws the freshness pill, it never calls the API.
+  function tick() {
+    const pill = $("freshPill");
+    if (!st.lastPing) { pill.className = "pill"; pill.textContent = "never pinged"; return; }
+    const age = Math.round((Date.now() - st.lastPing) / 1000), left = ttlSeconds() - age;
+    pill.className = "pill " + (left > 10 ? "ok" : left > 0 ? "warn" : "bad");
+    pill.textContent = left > 0
+      ? "pinged " + age + "s ago · stale in " + left + "s"
+      : "STALE for " + (-left) + "s — matching can no longer see you";
+  }
+  setInterval(tick, 1000);
+
+  function startAuto() {
+    stopAuto(true);
+    st.autoWanted = true;
+    const every = Math.max(MIN_PING_MS, Number($("pingEvery").value) * 1000);
+    st.autoTimer = setInterval(() => { pingOnce().catch(e => RH.banner("pingBanner", explain(e), "err")); }, every);
+    $("btnAuto").textContent = "Stop auto-ping";
+    pingOnce().catch(e => RH.banner("pingBanner", explain(e), "err"));
+  }
+
+  function stopAuto(keepIntent) {
+    clearInterval(st.autoTimer);
+    st.autoTimer = null;
+    if (!keepIntent) st.autoWanted = false;
+    $("btnAuto").textContent = "Start auto-ping";
+  }
+
+  $("btnAuto").onclick = () => { st.autoTimer ? stopAuto() : startAuto(); };
+  $("pingEvery").onchange = () => { if (st.autoTimer) startAuto(); };
+
+  /* -------------------------------- rides ------------------------------ */
+
+  function paymentCell(p) {
+    if (!p) return '<span class="muted">—</span>';
+    return p.status === "FAILED"
+      ? '<span class="pill bad">FAILED</span>'
+      : '<span class="pill ok">' + esc(p.method) + '</span>';
+  }
+
+  function rideRow(r) {
+    const live = LIVE.includes(r.status);
+    const failed = r.payment && r.payment.status === "FAILED";
+    return '<tr' + (failed ? ' style="background:#3a1414"' : '') + '>' +
+      '<td class="mono">#' + r.id + '</td>' +
+      '<td>' + esc(r.status) + '</td>' +
+      '<td>' + esc(r.assignedCarType || r.requestedCarType || "—") + '</td>' +
+      '<td>' + fmt(r.distanceKm) + '</td>' +
+      '<td>' + fmt(r.fare && r.fare.totalFare) + '</td>' +
+      '<td>' + (r.cancellationFee ? fmt(r.cancellationFee) : '<span class="muted">—</span>') + '</td>' +
+      '<td>' + paymentCell(r.payment) + '</td>' +
+      '<td>' +
+        (r.status === "DRIVER_ASSIGNED" ? '<button class="sm" data-act="start" data-ride="' + r.id + '">Start</button> ' : '') +
+        (r.status === "STARTED" ? '<button class="sm" data-act="complete" data-ride="' + r.id + '">Complete</button> ' : '') +
+        (live ? '<button class="sm" data-act="cancel" data-ride="' + r.id + '">Cancel</button> ' : '') +
+        '<button class="sm" data-act="pay" data-ride="' + r.id + '">Payments</button>' +
+      '</td></tr>';
+  }
+
+  async function loadRides() {
+    const size = Math.max(1, Number($("size").value) || 10);
+    const res = await RH.api("/drivers/" + driverId() + "/rides?page=" + st.page + "&size=" + size);
+    const items = res.items || [];
+    st.totalPages = Math.max(1, res.totalPages);
+    $("pageInfo").textContent = "page " + (res.page + 1) + " of " + st.totalPages + " · " + res.totalElements + " rides";
+    $("rideRows").innerHTML = items.length
+      ? items.map(rideRow).join("")
+      : '<tr><td colspan="8" class="muted">no rides on this page</td></tr>';
+    st.active = items.find(r => LIVE.includes(r.status)) || null;
+    if (st.active) $("payRide").value = st.active.id;
+    syncPoll();
+    return items;
+  }
+
+  $("btnRides").onclick = () => guard("rideBanner", loadRides);
+  $("btnPrev").onclick = () => guard("rideBanner", () => { st.page = Math.max(0, st.page - 1); return loadRides(); });
+  $("btnNext").onclick = () => guard("rideBanner", () => { st.page = Math.min(st.totalPages - 1, st.page + 1); return loadRides(); });
+
+  $("rideRows").onclick = (ev) => {
+    const b = ev.target.closest("[data-act]");
+    if (!b) return;
+    const id = b.dataset.ride, act = b.dataset.act, method = $("method").value;
+    if (act === "pay") { $("payRide").value = id; return loadPayments(); }
+    guard("rideBanner", async () => {
+      if (act === "start") await RH.api("/rides/" + id + "/start", { method: "POST" });
+      if (act === "complete") await RH.api("/rides/" + id + "/complete", { method: "POST", body: { paymentMethod: method } });
+      if (act === "cancel") await RH.api("/rides/" + id + "/cancel", { method: "POST", body: { reason: $("reason").value } });
+      await loadRides();
+      await loadProfile();
+      if (act === "complete") { $("payRide").value = id; await loadPayments(); }
+      RH.banner("rideBanner", "Ride #" + id + " " + (act === "complete" ? "completed as " + method : act + "ed") + ".", "ok");
+    });
+  };
+
+  /* -------------------------------- polling ---------------------------- */
+
+  function syncPoll() {
+    const live = st.active && LIVE.includes(st.active.status) && !document.hidden;
+    if (!live) return stopPoll();
+    if (st.pollTimer) return;
+    st.pollTimer = setInterval(pollActive, POLL_MS);
+    $("pollPill").className = "pill ok";
+    $("pollPill").textContent = "polling ride #" + st.active.id + " every 4s";
+  }
+
+  function stopPoll() {
+    clearInterval(st.pollTimer);
+    st.pollTimer = null;
+    $("pollPill").className = "pill";
+    $("pollPill").textContent = "not polling";
+  }
+
+  async function pollActive() {
+    if (!st.active || document.hidden) return stopPoll();
+    try {
+      const ride = await RH.api("/rides/" + st.active.id);
+      const changed = ride.status !== st.active.status;
+      st.active = ride;
+      if (changed) { await loadRides(); await loadProfile(); } else syncPoll();
+    } catch {
+      stopPoll();
+    }
+  }
+
+  // A hidden tab must cost the API nothing: both timers stop with it and resume with it.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) { stopAuto(true); stopPoll(); return; }
+    if (st.autoWanted) startAuto();
+    syncPoll();
+  });
+
+  /* ------------------------------- payments ---------------------------- */
+
+  function paymentTable(list) {
+    if (!list.length) return '<p class="muted">no payment recorded for this ride yet</p>';
+    return '<div class="scroll"><table><thead><tr><th>Id</th><th>Purpose</th><th>Method</th><th>Status</th>' +
+      '<th>Amount</th><th>Reference</th><th>Failure</th><th>Collected</th></tr></thead><tbody>' +
+      list.map(p => '<tr' + (p.status === "FAILED" ? ' style="background:#3a1414"' : '') + '>' +
+        '<td class="mono">' + p.id + '</td>' +
+        '<td>' + esc(p.purpose) + '</td>' +
+        '<td>' + esc(p.method) + '</td>' +
+        '<td><span class="pill ' + (p.status === "FAILED" ? "bad" : "ok") + '">' + esc(p.status) + '</span></td>' +
+        '<td>' + fmt(p.amount) + '</td>' +
+        '<td class="mono">' + esc(p.reference || "—") + '</td>' +
+        '<td>' + esc(p.failureReason || "—") + '</td>' +
+        '<td class="muted">' + esc(RH.when(p.collectedAt)) + '</td></tr>').join("") +
+      '</tbody></table></div>';
+  }
+
+  async function loadPayments() {
+    const id = String($("payRide").value).trim();
+    if (!id) return RH.banner("payBanner", "Enter a ride id, or press Payments on a row.", "err");
+    return guard("payBanner", async () => {
+      const list = await RH.api("/rides/" + id + "/payment");
+      $("paymentRows").innerHTML = paymentTable(list);
+      const failed = list.filter(p => p.status === "FAILED").length;
+      if (failed) RH.banner("payBanner", failed + " failed payment on ride #" + id + " — retry it with the method selected above.", "err");
+      return list;
+    });
+  }
+
+  $("btnPayments").onclick = loadPayments;
+
+  $("btnRetry").onclick = () => guard("payBanner", async () => {
+    const id = String($("payRide").value).trim();
+    const p = await RH.api("/rides/" + id + "/payment/retry", { method: "POST", body: { paymentMethod: $("method").value } });
+    $("paymentRows").innerHTML = paymentTable(await RH.api("/rides/" + id + "/payment"));
+    RH.banner("payBanner", "Retry answered " + p.status + (p.failureReason ? " — " + p.failureReason : "") + ".", p.status === "SUCCESS" ? "ok" : "err");
+  });
+
+  /* --------------------------------- demo ------------------------------ */
+
+  const demoLog = (text, kind) => {
+    const colour = kind === "ok" ? "var(--ok)" : kind === "err" ? "var(--bad)" : "var(--muted)";
+    $("demoOut").innerHTML += '<div style="color:' + colour + '">' + esc(text) + '</div>';
+  };
+
+  $("btnDemo").onclick = () => guard("driverBanner", async () => {
+    $("demoOut").innerHTML = "";
+    demoLog("· reading the profile for driver " + driverId());
+    let d = await loadProfile();
+    demoLog("  " + d.fullName + " is " + d.status);
+    if (d.status === "BUSY") { demoLog("already BUSY on a ride — nothing to bring online", "err"); return; }
+    demoLog("· switching to AVAILABLE");
+    d = renderProfile(await setStatus("AVAILABLE"));
+    demoLog("  status is now " + d.status, "ok");
+    demoLog("· parking at the MG Road demo pickup and pinging");
+    $("lat").value = MG_ROAD.lat;
+    $("lng").value = MG_ROAD.lng;
+    await pingOnce();
+    demoLog("  position " + MG_ROAD.lat + "," + MG_ROAD.lng + " accepted (204 No Content)", "ok");
+    demoLog("· a rider booking from MG Road now sees driver " + d.id + ": AVAILABLE in MySQL and fresh in the Redis GEO set", "ok");
+    demoLog("  that freshness lapses in " + ttlSeconds() + "s, after which matching evicts the position and skips you", "err");
+    startAuto();
+    demoLog("· auto-ping started every " + $("pingEvery").value + "s, comfortably inside the TTL", "ok");
+    await loadRides();
+    demoLog("  rides reloaded — " + $("pageInfo").textContent, "ok");
+  });
+
+  /* --------------------------------- init ------------------------------ */
+
+  tick();
+  guard("driverBanner", async () => {
+    // The prefilled id is a guess, so a miss falls straight through to the probe.
+    const d = await loadProfile().catch(() => resolveOwned());
+    if (d) await loadRides();
+  });
+})();
+</script>
+</body>
+</html>

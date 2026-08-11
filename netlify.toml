@@ -1,0 +1,12 @@
+# Static site: the pages call the API cross-origin, so there is nothing to build.
+[build]
+  publish = "web"
+  command = ""
+
+# The API host must also list this site in CORS_ALLOWED_ORIGINS or the browser blocks every call.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"

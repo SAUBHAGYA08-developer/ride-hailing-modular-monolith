@@ -1,5 +1,6 @@
 server:
-  port: ${SERVER_PORT:8080}
+  # PORT is injected by the host platform and wins; SERVER_PORT stays for local overrides.
+  port: ${PORT:${SERVER_PORT:8080}}
   error:
     whitelabel:
       enabled: false

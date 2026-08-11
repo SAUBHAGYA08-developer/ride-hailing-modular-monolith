@@ -55,6 +55,8 @@ public class SecurityConfig {
                         // architecture page is documentation that calls nothing.
                         .requestMatchers(HttpMethod.GET,
                                 "/", "/index.html", "/architecture.html", "/favicon.ico").permitAll()
+                        // Role consoles. Static assets only: every call they make still carries a JWT.
+                        .requestMatchers(HttpMethod.GET, "/app/**").permitAll()
                         .anyRequest().authenticated())
                 .exceptionHandling(handling -> handling
                         .authenticationEntryPoint(securityErrorResponder)
