@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.List;
 
@@ -32,6 +33,8 @@ import java.util.List;
 @Service
 @RequiredArgsConstructor
 public class RideCreationService {
+
+    private static final int PICKUP_DISTANCE_SCALE = 2;
 
     private final com.ridehailing.ride.repository.RideRepository rideRepository;
     private final DriverReservationService driverReservationService;
@@ -65,6 +68,9 @@ public class RideCreationService {
         ride.setStatus(RideStatus.DRIVER_ASSIGNED);
         ride.setRequestedCarType(request.carType());
         ride.setAssignedCarType(winner.carType());
+        // valueOf, not new BigDecimal(double), which would persist binary artefacts; not Money either, this is not money.
+        ride.setDriverPickupDistanceKm(BigDecimal.valueOf(winner.distanceKm())
+                .setScale(PICKUP_DISTANCE_SCALE, RoundingMode.HALF_UP));
         ride.setPickupLatitude(request.pickupLatitude());
         ride.setPickupLongitude(request.pickupLongitude());
         ride.setPickupAddress(request.pickupAddress());

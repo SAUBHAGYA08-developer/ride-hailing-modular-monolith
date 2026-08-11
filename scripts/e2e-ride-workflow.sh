@@ -131,7 +131,8 @@ check "rider can read" "STARTED" \
     "$(curl -s "$BASE/rides/$RIDE_ID" -H "Authorization: Bearer $RIDER" | jget data.status)"
 
 step "14. Driver completes the ride"
-DONE_JSON=$(curl -s -X POST "$BASE/rides/$RIDE_ID/complete" -H "Authorization: Bearer $WTOKEN")
+DONE_JSON=$(curl -s -X POST "$BASE/rides/$RIDE_ID/complete" -H "Authorization: Bearer $WTOKEN" \
+  -H "Content-Type: application/json" -d '{"paymentMethod":"CASH"}')
 check "completed"        "COMPLETED" "$(echo "$DONE_JSON" | jget data.status)"
 check "fare unchanged"   "$FARE"     "$(echo "$DONE_JSON" | jget data.fare.totalFare)"
 

@@ -91,6 +91,19 @@
 			<artifactId>lombok</artifactId>
 			<optional>true</optional>
 		</dependency>
+
+		<!--
+			Brings JUnit Jupiter, AssertJ and Mockito at the versions the Boot
+			parent already pins, so the test classpath cannot drift from the
+			runtime one. The domain tests need nothing beyond this starter:
+			policy, matching, geo and money logic are all pure, so none of them
+			opens a Spring context, MySQL or Redis.
+		-->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-test</artifactId>
+			<scope>test</scope>
+		</dependency>
 	</dependencies>
 
 	<build>

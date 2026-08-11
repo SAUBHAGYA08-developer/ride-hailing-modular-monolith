@@ -1,6 +1,6 @@
 # Ride Hailing Backend
 
-A **modular monolith** ride-hailing platform: one Spring Boot application, eight
+A **modular monolith** ride-hailing platform: one Spring Boot application, nine
 independently-owned MySQL schemas, Redis for live driver geography and hot-path
 coordination.
 
@@ -68,7 +68,7 @@ Root package is `com.ridehailing`. Never `com.example.*`.
 # 1. Infrastructure (MySQL 8 + Redis 7)
 docker compose up -d
 
-# 2. Application (Flyway migrates all eight schemas on startup)
+# 2. Application (Flyway migrates all nine schemas on startup)
 ./mvnw spring-boot:run
 ```
 
@@ -128,6 +128,7 @@ com.ridehailing
 ├── user/          →  user_schema           users (the single identity store)
 ├── driver/        →  driver_schema         drivers, vehicles  (+ Redis GEO)
 ├── ride/          →  ride_schema           rides, idempotency_keys
+├── payment/       →  payment_schema        payments  (strategy per method + partner port)
 ├── pricing/       →  pricing_schema        pricing_rules, tiers, car-type multipliers
 ├── coupon/        →  coupon_schema         coupons, coupon_redemptions
 ├── audit/         →  audit_schema          audit_logs
@@ -153,6 +154,7 @@ controller ──▶ every module's service        (thin, no logic)
 ride ──▶ driver        (find candidates, reserve/release a driver)
 ride ──▶ pricing       (fare quote)
 ride ──▶ coupon        (redeem / reverse)
+ride ──▶ payment       (collect the fare / the cancellation fee)
 ride ──▶ user          (existence check)
 pricing ──▶ coupon     (apply discount inside the quote)
 driver ──▶ user        (a driver profile is backed by a user account)
@@ -160,8 +162,9 @@ security ──▶ user, rbac
 every module ──▶ common, configuration, audit, redis, ratelimit
 ```
 
-There are **no cycles**. `coupon`, `configuration`, `audit`, `rbac` and `user`
-depend on no other business module. If you need a new edge, question it first.
+There are **no cycles**. `coupon`, `payment`, `configuration`, `audit`, `rbac` and
+`user` depend on no other business module — `payment` knows a ride only by its id,
+which is what keeps the `ride ──▶ payment` edge one-directional. If you need a new edge, question it first.
 
 ### Why controllers are centralised but logic is not
 
@@ -235,6 +238,20 @@ class CouponService {
     void                     deactivate(Long couponId);
 }
 
+// --- payment module --------------------------------------------------------
+package com.ridehailing.payment.api;
+record PaymentRequest(Long rideId, Long userId, Long driverId, BigDecimal amount, PaymentPurpose purpose) {}
+record PaymentSummary(Long id, Long rideId, PaymentPurpose purpose, PaymentMethod method, PaymentStatus status,
+                      BigDecimal amount, String reference, String failureReason, Instant collectedAt) {}
+
+package com.ridehailing.payment.service;
+class PaymentService {
+    PaymentSummary           collect(PaymentMethod method, PaymentRequest request);  // idempotent per (ride, purpose)
+    PaymentSummary           retry(PaymentRequest request, PaymentMethod override);  // 409 if already SUCCESS
+    List<PaymentSummary>     findByRide(Long rideId);
+    Optional<PaymentSummary> findLatest(Long rideId, PaymentPurpose purpose);
+}
+
 // --- user module -----------------------------------------------------------
 package com.ridehailing.user.service;
 class UserService {
@@ -267,7 +284,7 @@ class AuditService {
 
 ### The schema-per-module rule
 
-Eight schemas, one per module. **No foreign key ever crosses a schema boundary.**
+Nine schemas, one per module. **No foreign key ever crosses a schema boundary.**
 `ride_schema.rides.user_id` is a plain `BIGINT` with a comment saying what it
 points at; there is no FK to `user_schema.users`. Within a schema, real FKs are
 used (`vehicles.driver_id → drivers.id`, `pricing_distance_tiers.pricing_rule_id →
@@ -302,6 +319,7 @@ is append-only, so a version column and an "updated by" would be meaningless.
 | | `vehicles` | unique `registration_number`, index `(driver_id, active, car_type)`, FK to `drivers` |
 | `ride_schema` | `rides` | full pricing snapshot, indexes `(user_id, requested_at DESC)` and `(driver_id, requested_at DESC)`, CHECKs on status/car types/amounts |
 | | `idempotency_keys` | **unique `(user_id, idempotency_key)`** — the real duplicate-ride guard |
+| `payment_schema` | `payments` | index `(ride_id, purpose, status)`, unique `reference`, CHECKs on purpose/method/status/amount; **no** unique `(ride_id, purpose)` — see [Payments](#payments) |
 | `pricing_schema` | `pricing_rules` | unique `code` |
 | | `pricing_distance_tiers` | unique `(pricing_rule_id, from_km)`, CHECK `to_km > from_km` |
 | | `pricing_car_type_multipliers` | unique `(pricing_rule_id, car_type)` |
@@ -319,7 +337,7 @@ lookup by entity or by request). There are no speculative indexes.
 
 | File | Contents |
 |---|---|
-| `V1__create_schemas.sql` | the eight schemas |
+| `V1__create_schemas.sql` | the first eight schemas |
 | `V2__create_rbac_tables.sql` | roles, permissions, role_permissions |
 | `V3__create_user_tables.sql` | users |
 | `V4__create_driver_tables.sql` | drivers, vehicles |
@@ -334,6 +352,8 @@ lookup by entity or by request). There are no speculative indexes.
 | `V13__seed_coupon_master_data.sql` | WELCOME10, FLAT50, FIRST100 |
 | `V14__seed_demo_users_drivers_vehicles.sql` | demo users, drivers, vehicles |
 | `V15__add_city_pricing_zones.sql` | `pricing_zones` table, `rides.pricing_zone_code`, Delhi/Pune rules + 3 city zones |
+| `V18__create_payment_tables.sql` | `payment_schema` + `payments`, payment settings, `PAYMENT_READ` / `PAYMENT_COLLECT` |
+| `V20__add_ride_pickup_distance.sql` | `rides.driver_pickup_distance_km`, `ride.pickup.average.speed.kmph` |
 
 Required data is created by migrations, never by application startup code. The one
 startup component that exists (`DriverLocationWarmupRunner`) only republishes
@@ -353,6 +373,7 @@ Roles: `ADMIN`, `USER`, `DRIVER`. Permissions are `RESOURCE_ACTION` codes.
 | drivers | `DRIVER_CREATE`, `DRIVER_READ`, `DRIVER_UPDATE`, `DRIVER_LOCATION_UPDATE`, `DRIVER_STATUS_UPDATE` |
 | vehicles | `VEHICLE_CREATE`, `VEHICLE_READ`, `VEHICLE_UPDATE` |
 | rides | `RIDE_CREATE`, `RIDE_READ`, `RIDE_START`, `RIDE_COMPLETE`, `RIDE_CANCEL` |
+| payments | `PAYMENT_READ`, `PAYMENT_COLLECT` |
 | coupons | `COUPON_CREATE`, `COUPON_READ`, `COUPON_DELETE`, `COUPON_VALIDATE` |
 | pricing | `PRICING_READ`, `PRICING_CREATE`, `PRICING_UPDATE` |
 | configuration | `CONFIGURATION_READ`, `CONFIGURATION_UPDATE` |
@@ -361,8 +382,11 @@ Roles: `ADMIN`, `USER`, `DRIVER`. Permissions are `RESOURCE_ACTION` codes.
 Role → permission mapping:
 
 * **ADMIN** — every permission.
-* **USER** — `USER_READ`, `RIDE_CREATE`, `RIDE_READ`, `RIDE_CANCEL`, `COUPON_READ`, `COUPON_VALIDATE`, `PRICING_READ`.
-* **DRIVER** — `DRIVER_READ`, `DRIVER_UPDATE`, `DRIVER_LOCATION_UPDATE`, `DRIVER_STATUS_UPDATE`, `VEHICLE_CREATE`, `VEHICLE_READ`, `VEHICLE_UPDATE`, `RIDE_READ`, `RIDE_START`, `RIDE_COMPLETE`, `RIDE_CANCEL`.
+* **USER** — `USER_READ`, `RIDE_CREATE`, `RIDE_READ`, `RIDE_CANCEL`, `COUPON_READ`, `COUPON_VALIDATE`, `PRICING_READ`, `PAYMENT_READ`.
+* **DRIVER** — `DRIVER_READ`, `DRIVER_UPDATE`, `DRIVER_LOCATION_UPDATE`, `DRIVER_STATUS_UPDATE`, `VEHICLE_CREATE`, `VEHICLE_READ`, `VEHICLE_UPDATE`, `RIDE_READ`, `RIDE_START`, `RIDE_COMPLETE`, `RIDE_CANCEL`, `PAYMENT_READ`, `PAYMENT_COLLECT`.
+
+A rider gets `PAYMENT_READ` but never `PAYMENT_COLLECT`: they may see what they were
+charged, but reporting that money arrived is the driver's job.
 
 Adding a role is pure data: insert a row and its mappings. No Java change.
 
@@ -564,6 +588,32 @@ POST /api/v1/rides
 
 **Redis finds candidates. MySQL decides who actually got the driver.**
 
+### How far away the driver is
+
+The booking response tells the rider where their driver is, which it previously did
+not: `GEOSEARCH` already returned the distance and `DriverCandidate` already carried
+it, but it was used for ranking and then thrown away. The winner's distance is now
+persisted on the ride as `driver_pickup_distance_km` and returned on every ride read.
+
+| Field | Meaning |
+|---|---|
+| `driverPickupDistanceKm` | `1.87` — km from the driver to the pickup |
+| `estimatedPickupEtaMinutes` | `6` — that distance at `ride.pickup.average.speed.kmph` (default `20`), rounded **up** |
+
+Two honest limits, both of which matter more than the feature:
+
+* **It is straight-line, not road distance.** The value comes from the haversine
+  distance in the Redis GEO index, so it always reads lower than the driver's real
+  approach — 600 m away may be the wrong side of a one-way. The field is named
+  `driverPickupDistanceKm`, not `distanceToPickup`, so nobody reads it as driving
+  distance, and the ETA rounds up rather than down because an ETA that rounds down is
+  a promise the driver cannot keep.
+* **It is a snapshot taken at assignment, not a live figure.** The driver starts
+  moving immediately afterwards, so the number ages from the moment it is written. A
+  live distance belongs behind its own endpoint reading the driver's current Redis
+  position on each call — a ride row is the wrong place for a value that changes every
+  few seconds — and that endpoint is deliberately not built here.
+
 ### The reservation CAS
 
 Two riders must never book the same driver. This is enforced by a guarded
@@ -763,7 +813,8 @@ Side effects:
 
 * **start** — assigned driver or ADMIN only; sets `started_at`.
 * **complete** — assigned driver or ADMIN; sets `completed_at`; driver goes
-  `BUSY → AVAILABLE` and `total_rides` increments atomically.
+  `BUSY → AVAILABLE` and `total_rides` increments atomically; **collects the fare**
+  (below), so this endpoint now requires a body naming the payment method.
 * **cancel** — rider, assigned driver, or ADMIN; releases the driver back to
   `AVAILABLE`, reverses the coupon redemption so the rider gets the use back, and
   decides a cancellation fee (below). `cancelled_by` is derived from the
@@ -825,6 +876,118 @@ it is not a financial event.
 Verified against a running instance: rider inside grace → `0.00`; driver cancel past
 grace → `0.00`; rider past grace → `30.00`; `total_fare` unchanged at `50.00` in all
 three.
+
+### Payments
+
+Money is collected **at completion, not at booking**, because that is the first
+moment the method is a fact rather than an intention — a rider who chose UPI on the
+map may still hand over notes, and only the driver knows which happened.
+
+```
+POST /api/v1/rides/{id}/complete   {"paymentMethod": "UPI"}
+   ↓  RideLifecycleService.complete  (assigned driver or ADMIN)
+   ↓  ride → COMPLETED, driver BUSY → AVAILABLE
+   ↓  PaymentStrategyFactory.forMethod(UPI) → UpiPaymentStrategy
+   ↓  PaymentPartner.charge(...)  → MockPaymentPartner  (synchronous, no network)
+   ↓  payments row: SUCCESS + reference, or FAILED + reason
+   ↓  audit PAYMENT_COLLECTED / PAYMENT_FAILED against the ride
+```
+
+**Five methods**, each with its own `PaymentStrategy` bean:
+`CASH`, `UPI`, `CARD`, `WALLET`, `NETBANKING`. Adding a sixth is an enum constant
+plus one `@Component` — `PaymentStrategyFactory` refuses to start the application if
+any `PaymentMethod` has no strategy, or if two claim the same one, so the enum and
+the strategies cannot drift apart silently. That startup check is the whole reason a
+new method cannot become a 500 in front of a rider.
+
+**`CASH` is the one method with no payment partner.** The driver already has the
+notes in hand, so there is nothing to authorise; the other four delegate to the
+`PaymentPartner` port. That asymmetry is why strategy and partner are two
+abstractions rather than one — collapsing them would need a no-op partner for cash.
+
+**The partner is mocked, deliberately.** `PaymentPartner` is the outbound port a real
+PSP (Razorpay, PayU, Cashfree) will implement; `MockPaymentPartner` is the only
+implementation today and does no network I/O, no sleeping and nothing random.
+Integrating a real one means adding one `@Component` — no strategy, service or
+controller changes. It is intentionally **not** `@Primary`: when a second partner
+appears, injection becomes ambiguous and startup fails, which is exactly when the
+`payment.partner` config key and a resolver (mirroring
+`DriverMatchingStrategyResolver`) should be written. A `@Primary` mock would quietly
+keep serving production traffic instead.
+
+**A failed payment never blocks or rolls back the completion.** The ride happened and
+the driver is free; punishing that with a rollback would trap a driver against a trip
+they have already finished. So the ride completes, the row is written `FAILED`, the
+reason is visible on `RideResponse.payment`, and the retry endpoint chases the money.
+This is only safe because a decline is a return value rather than an exception — an
+infrastructure failure (a dead database, not a declined card) still rolls the whole
+transaction back, which is right.
+
+**Collection is idempotent.** A replayed completion must never double-charge. The
+constraint wanted is *at most one `SUCCESS` per `(ride_id, purpose)`*, which MySQL
+cannot express — it has no partial unique index, and a plain unique key would also
+forbid the failed attempt a retry has to sit beside. `PaymentService` enforces it
+instead: an existing `SUCCESS` row is returned unchanged and no strategy is asked
+twice. Concurrent completions are stopped a layer up by the ride's `@Version`.
+
+**The cancellation fee flows through the same module**, distinguished only by
+`purpose = CANCELLATION_FEE`, and only when the computed fee is greater than zero — a
+free cancellation leaves no payment row at all. It cannot be cash (rider and driver
+never met), so the method comes from `payment.cancellation.fee.method` rather than
+from the till.
+
+**Simulated failures are configuration, never random**, so the decline path can be
+demonstrated on request and asserted on later:
+
+```bash
+# Make every card payment decline, reproducibly
+curl -s -X PUT http://localhost:8080/api/v1/configurations/payment.simulated.failure.methods \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"value": "CARD"}'
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `payment.simulated.failure.methods` | `NONE` | CSV of methods the mock partner declines. Case- and whitespace-insensitive; an unknown name is logged and ignored, never fatal. `NONE` rather than `""` because a blank `STRING` is rejected on update, which would make a cleared row unrecoverable. |
+| `payment.cancellation.fee.method` | `UPI` | How a cancellation fee is taken. A typo degrades to `UPI` with a warning rather than failing the cancellation. |
+
+Complete a ride and take the fare:
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/rides/42/complete \
+  -H "Authorization: Bearer $DRIVER_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"paymentMethod": "UPI"}'
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": 42, "status": "COMPLETED",
+    "fare": { "totalFare": 118.00 },
+    "payment": {
+      "purpose": "RIDE_FARE", "method": "UPI", "status": "SUCCESS",
+      "amount": 118.00, "reference": "UPI-42-1754899532114"
+    }
+  }
+}
+```
+
+Then, if it had declined:
+
+```bash
+# Same method again, or switch instrument: {"paymentMethod": "CASH"}
+curl -s -X POST http://localhost:8080/api/v1/rides/42/payment/retry \
+  -H "Authorization: Bearer $DRIVER_TOKEN" -H 'Content-Type: application/json' -d '{}'
+```
+
+Retrying an already-settled payment is `409 PAYMENT_ALREADY_SETTLED` rather than a
+silent success, so a broken client cannot retry for ever without noticing. A ride
+with nothing to retry is `404 PAYMENT_NOT_FOUND`.
+
+No amount, rider id or driver id is ever read from a request body — every figure
+comes off the ride row, so no caller can redirect a charge or change its price.
 
 ---
 
@@ -929,8 +1092,10 @@ All paths are prefixed `/api/v1`. All responses use the envelope above.
 | POST | `/rides` | `RIDE_CREATE` | rider = token | `Idempotency-Key` supported; rate limited |
 | GET | `/rides/{rideId}` | `RIDE_READ` | rider, assigned driver, or ADMIN | |
 | POST | `/rides/{rideId}/start` | `RIDE_START` | assigned driver or ADMIN | |
-| POST | `/rides/{rideId}/complete` | `RIDE_COMPLETE` | assigned driver or ADMIN | frees the driver |
-| POST | `/rides/{rideId}/cancel` | `RIDE_CANCEL` | rider, assigned driver, or ADMIN | reverses the coupon |
+| POST | `/rides/{rideId}/complete` | `RIDE_COMPLETE` | assigned driver or ADMIN | frees the driver; **body `{"paymentMethod":…}` required**; collects the fare |
+| POST | `/rides/{rideId}/cancel` | `RIDE_CANCEL` | rider, assigned driver, or ADMIN | reverses the coupon; collects the fee if it is non-zero |
+| GET | `/rides/{rideId}/payment` | `PAYMENT_READ` | rider, assigned driver, or ADMIN | fare and any cancellation fee, oldest first |
+| POST | `/rides/{rideId}/payment/retry` | `PAYMENT_COLLECT` | assigned driver or ADMIN | body optional; 409 if already settled |
 | GET | `/users/{userId}/rides` | `RIDE_READ` | self or ADMIN | paginated |
 | GET | `/drivers/{driverId}/rides` | `RIDE_READ` | self or ADMIN | paginated |
 | POST | `/coupons` | `COUPON_CREATE` | ADMIN | |
@@ -1071,20 +1236,14 @@ Known gaps, listed so nobody assumes they exist:
   gated by `surge.enabled`; there is no demand-based engine that adjusts it.
 * **No expired-idempotency-record sweeper.** The `idx_idempotency_expires` index is
   in place for one, but no scheduled cleanup job runs.
-* **No ETA, and that is a decision rather than an omission.** Neither the driver's
-  arrival time nor the trip duration is shown. Straight-line distance cannot produce
-  a defensible pickup ETA — a driver 600 m away may be on the wrong side of a one-way
-  or a flyover, which is four minutes rather than one — and **an ETA that is wrong is
-  worse than no ETA**, because it is a promise the platform then breaks. Doing it
-  properly needs a routing provider for real road distance and duration, plus
-  estimated-versus-actual tracking to know whether the number can be trusted at all.
-  That is a project, not a field.
-
-  Two things are already in place for whenever it is built. The driver's distance to
-  the pickup is *computed today* — `GEOSEARCH` returns it and `DriverCandidate`
-  carries it — but it is used for ranking and then discarded rather than surfaced.
-  And `assigned_at` / `started_at` / `completed_at` already record the actual
-  durations, so the measurement side is ready before the estimation side exists.
+* **No road-distance ETA.** A straight-line pickup distance and a speed-derived
+  pickup ETA now exist (see [How far away the driver is](#how-far-away-the-driver-is)),
+  but both are honest approximations, and the trip duration is still not estimated at
+  all. A defensible ETA needs a routing provider for real road distance and duration
+  plus estimated-versus-actual tracking to know whether the number can be trusted —
+  that is a project, not a field. The measurement half is already in place:
+  `assigned_at` / `started_at` / `completed_at` record what actually happened, so the
+  current estimate can be scored against reality before anyone relies on it.
 
   The same missing input limits pricing: fares are built on straight-line distance
   and are therefore systematically low. A routing provider would fix the fare and
@@ -1102,10 +1261,15 @@ Known gaps, listed so nobody assumes they exist:
   `DriverMatchingStrategy` bean is selected by the `matching.strategy` config row
   and an unknown value degrades to `NEAREST` — but `NEAREST` is the only
   implementation. `HIGHEST_RATED` would be a new `@Component` and nothing else.
-* **No driver earnings or payments.** `rides.total_fare` is what the rider pays;
-  there is no commission split, payout, settlement or ledger, and no decision
-  recorded about who funds a coupon discount. A `SUM(total_fare)` per driver
-  answers "what did riders pay", not "what do we owe".
+* **No driver earnings, payouts or refunds.** Collection exists (see
+  [Payments](#payments)) but only inbound: there is no commission split, payout,
+  settlement or refund path, and no decision recorded about who funds a coupon
+  discount. `SUM(amount)` over `payments` answers "what did riders pay", not "what do
+  we owe a driver".
+* **The payment partner is mocked.** `MockPaymentPartner` is the only `PaymentPartner`,
+  so no money has ever actually moved. The port is the seam a real PSP plugs into, and
+  a real one also brings the things this design has no answer for yet: asynchronous
+  callbacks (hence no `PENDING` status), refunds, and reconciliation.
 * **`ride.cancellation.allowed.statuses` is dead configuration.** The constant
   exists in `ConfigKeys` and the row is seeded, but nothing reads it —
   `RideStateMachine` is the single source of truth for legal transitions. It should
@@ -1113,11 +1277,14 @@ Known gaps, listed so nobody assumes they exist:
 * **Client-supplied `X-Forwarded-For` is trusted.** `RequestIdFilter` takes the
   first value blindly, so the IP-keyed login rate limit can be bypassed by
   rotating the header. Fix is to trust the header only from known proxies.
-* **Verified end to end on MySQL 9.7 + Redis 7** (Homebrew, not Docker): all 16
+* **Verified end to end on MySQL 9.7 + Redis 7** (Homebrew, not Docker): the
   migrations apply, login/booking/start/complete/cancel, car-type upgrade,
   cancellation fee, idempotent replay, rate limiting (429 + `Retry-After`), audit
   trail and Redis GEO matching all behave as documented. Not yet exercised on
-  MySQL 8.0 itself, nor under real concurrent load.
+  MySQL 8.0 itself, nor under real concurrent load. **Payments and the pickup
+  distance/ETA are the exception: they are not yet exercised against a running
+  instance**, so treat the payment walkthrough above as the intended behaviour rather
+  than an observed one.
 
 ---
 

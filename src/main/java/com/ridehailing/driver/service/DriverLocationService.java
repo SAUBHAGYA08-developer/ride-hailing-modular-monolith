@@ -23,8 +23,10 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * The only component in the application permitted to touch the Redis GEO set.
@@ -98,6 +100,71 @@ public class DriverLocationService {
         return nearby;
     }
 
+    /**
+     * Every driver currently reporting a fresh position, as driver ids.
+     *
+     * This walks the entire GEO set, so it is an operator view and never a
+     * booking path: dispatch reads positions through {@link #findNearby}, which
+     * is bounded by radius and limit. Booking must not pay for the whole fleet.
+     *
+     * Freshness is resolved with a single multiGet instead of a hasKey per
+     * member, so the whole call is two round trips whether the fleet is 10
+     * drivers or 10,000. Stale members are evicted on the way past, exactly as
+     * findNearby does, so an operational read also heals the set.
+     *
+     * If the multiGet comes back null, Redis could not answer at all. "Stale"
+     * and "cannot tell" are indistinguishable in that case, so nothing is
+     * evicted - deleting live positions on the strength of a failed read would
+     * let a Redis hiccup unbook the whole fleet - and the caller sees an empty
+     * live set, which reads as a total presence outage rather than as a set that
+     * has been quietly pruned on bad information.
+     */
+    public Set<Long> liveDriverIds() {
+        Set<String> members = redis.opsForZSet().range(RedisKeys.DRIVER_GEO_SET, 0, -1);
+        if (members == null || members.isEmpty()) {
+            return Set.of();
+        }
+
+        // Two parallel lists rather than a map: the multiGet result comes back
+        // positionally, so the index is what ties a reply back to its driver.
+        List<Long> candidates = new ArrayList<>(members.size());
+        List<String> freshnessKeys = new ArrayList<>(members.size());
+        for (String member : members) {
+            Long driverId = parseMember(member);
+            if (driverId == null) {
+                // Junk regardless of freshness, so this eviction needs no reply.
+                evict(member);
+                continue;
+            }
+            candidates.add(driverId);
+            freshnessKeys.add(RedisKeys.driverLocationFreshness(driverId));
+        }
+        if (candidates.isEmpty()) {
+            return Set.of();
+        }
+
+        List<String> freshness = redis.opsForValue().multiGet(freshnessKeys);
+        if (freshness == null || freshness.size() != candidates.size()) {
+            log.warn("Freshness lookup for {} members of {} returned nothing usable; "
+                            + "reporting an empty live set and evicting nothing",
+                    candidates.size(), RedisKeys.DRIVER_GEO_SET);
+            return Set.of();
+        }
+
+        Set<Long> live = new LinkedHashSet<>(candidates.size());
+        for (int index = 0; index < candidates.size(); index++) {
+            Long driverId = candidates.get(index);
+            if (freshness.get(index) == null) {
+                // The driver stopped reporting: what is left is a position, not
+                // a location. Drop it so the next reader is not misled either.
+                evict(member(driverId));
+                continue;
+            }
+            live.add(driverId);
+        }
+        return live;
+    }
+
     public void removeLocation(Long driverId) {
         evict(member(driverId));
         redis.delete(RedisKeys.driverLocationFreshness(driverId));
@@ -126,7 +193,12 @@ public class DriverLocationService {
         redis.opsForZSet().remove(RedisKeys.DRIVER_GEO_SET, member);
     }
 
-    private int locationTtlSeconds() {
+    /**
+     * How long a reported position stays trustworthy. Visible outside the class
+     * only so an operator view can publish it: a presence count is impossible to
+     * interpret without knowing the window it was measured over.
+     */
+    public int locationTtlSeconds() {
         return configurationService.getInt(ConfigKeys.DRIVER_LOCATION_TTL_SECONDS, DEFAULT_LOCATION_TTL_SECONDS);
     }
 

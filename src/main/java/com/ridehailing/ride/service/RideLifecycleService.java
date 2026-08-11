@@ -10,6 +10,11 @@ import com.ridehailing.configuration.service.ConfigurationService;
 import com.ridehailing.coupon.service.CouponService;
 import com.ridehailing.driver.service.DriverReservationService;
 import com.ridehailing.driver.service.DriverService;
+import com.ridehailing.payment.api.PaymentRequest;
+import com.ridehailing.payment.api.PaymentSummary;
+import com.ridehailing.payment.entity.PaymentMethod;
+import com.ridehailing.payment.entity.PaymentPurpose;
+import com.ridehailing.payment.service.PaymentService;
 import com.ridehailing.ride.CancellationFeePolicy;
 import com.ridehailing.ride.RideStateMachine;
 import com.ridehailing.ride.dto.RideMapper;
@@ -26,6 +31,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -41,10 +47,14 @@ public class RideLifecycleService {
     /** Used only if the configuration row cannot be read at all. */
     private static final BigDecimal DEFAULT_CANCELLATION_FEE = new BigDecimal("30.00");
 
+    /** A cancellation fee cannot be cash: rider and driver never met. */
+    private static final PaymentMethod DEFAULT_CANCELLATION_FEE_METHOD = PaymentMethod.UPI;
+
     private final RideRepository rideRepository;
     private final DriverReservationService driverReservationService;
     private final DriverService driverService;
     private final CouponService couponService;
+    private final PaymentService paymentService;
     private final ConfigurationService configurationService;
     private final AuditService auditService;
     private final RideMapper rideMapper;
@@ -53,14 +63,16 @@ public class RideLifecycleService {
     public RideResponse start(Long rideId, AuthPrincipal principal) {
         Ride ride = requireRide(rideId);
         requireAssignedDriverOrAdmin(ride, principal);
-        return transition(ride, RideStatus.STARTED, now -> ride.setStartedAt(now));
+        return rideMapper.toResponse(transition(ride, RideStatus.STARTED, now -> ride.setStartedAt(now)));
     }
 
+    /** A declined payment never undoes the completion: the ride stands, the row is FAILED, and the retry endpoint chases it. */
+    // Safe only because a decline is a PaymentResult, not an exception; a dead database still rolls the whole thing back.
     @Transactional
-    public RideResponse complete(Long rideId, AuthPrincipal principal) {
+    public RideResponse complete(Long rideId, AuthPrincipal principal, PaymentMethod paymentMethod) {
         Ride ride = requireRide(rideId);
         requireAssignedDriverOrAdmin(ride, principal);
-        RideResponse response = transition(ride, RideStatus.COMPLETED, now -> ride.setCompletedAt(now));
+        Ride completed = transition(ride, RideStatus.COMPLETED, now -> ride.setCompletedAt(now));
 
         // Frees the driver and increments their ride counter in one atomic
         // statement, so a replayed completion cannot double count.
@@ -74,7 +86,15 @@ public class RideLifecycleService {
             // freshest position the snapshot will see until they next go online.
             driverService.captureLocationSnapshot(ride.getDriverId());
         }
-        return response;
+
+        // After the release, which must not be delayed by anything; replay is guarded inside PaymentService.
+        PaymentSummary payment = paymentService.collect(paymentMethod,
+                paymentRequest(completed, PaymentPurpose.RIDE_FARE));
+        log.info("Ride {} completed, fare {} collected by {} with status {}", rideId, payment.amount(),
+                payment.method(), payment.status());
+
+        // Mapped only now, so the response carries the payment that was just written.
+        return rideMapper.toResponse(completed);
     }
 
     @Transactional
@@ -90,7 +110,7 @@ public class RideLifecycleService {
                 ConfigKeys.CANCELLATION_FEE_AMOUNT, DEFAULT_CANCELLATION_FEE);
         long graceSeconds = configurationService.getInt(ConfigKeys.CANCELLATION_FEE_GRACE_SECONDS, 120);
 
-        RideResponse response = transition(ride, RideStatus.CANCELLED, now -> {
+        Ride cancelled = transition(ride, RideStatus.CANCELLED, now -> {
             ride.setCancelledAt(now);
             ride.setCancelledBy(cancelledBy);
             ride.setCancellationReason(reason);
@@ -106,20 +126,56 @@ public class RideLifecycleService {
                     Map.of("status", "BUSY"), Map.of("status", "AVAILABLE", "rideId", rideId));
             driverService.captureLocationSnapshot(driverId);
         }
-        // A charge the rider has to answer for belongs in the trail, and only
-        // when it is non zero: a free cancellation is not a financial event.
+        // Only a non-zero fee is a financial event, so a free cancellation leaves neither audit row nor payment row.
         if (ride.getCancellationFee() != null && ride.getCancellationFee().signum() > 0) {
             auditService.record(AuditEntities.RIDE, rideId, AuditActions.RIDE_STATUS_CHANGED, null,
                     Map.of("cancellationFee", ride.getCancellationFee(),
                             "cancelledBy", cancelledBy.name(),
                             "graceSeconds", graceSeconds));
+            // Same module as the fare, distinguished only by purpose: a second collection path would be a second ledger.
+            paymentService.collect(cancellationFeeMethod(),
+                    paymentRequest(cancelled, PaymentPurpose.CANCELLATION_FEE));
         }
         // The rider keeps the coupon use they never got a ride for.
         couponService.reverse(rideId);
-        return response;
+        return rideMapper.toResponse(cancelled);
     }
 
-    private RideResponse transition(Ride ride, RideStatus target, java.util.function.Consumer<Instant> mutation) {
+    /** Assigned driver or ADMIN only, as for completion, and the purpose follows from the ride's own state. */
+    @Transactional
+    public PaymentSummary retryPayment(Long rideId, AuthPrincipal principal, PaymentMethod method) {
+        Ride ride = requireRide(rideId);
+        requireAssignedDriverOrAdmin(ride, principal);
+
+        PaymentPurpose purpose = ride.getStatus() == RideStatus.CANCELLED
+                ? PaymentPurpose.CANCELLATION_FEE
+                : PaymentPurpose.RIDE_FARE;
+        return paymentService.retry(paymentRequest(ride, purpose), method);
+    }
+
+    /** Every figure comes off the ride row, so no request body can redirect a charge. */
+    private PaymentRequest paymentRequest(Ride ride, PaymentPurpose purpose) {
+        BigDecimal amount = purpose == PaymentPurpose.CANCELLATION_FEE
+                ? ride.getCancellationFee()
+                : ride.getTotalFare();
+        return new PaymentRequest(ride.getId(), ride.getUserId(), ride.getDriverId(), amount, purpose);
+    }
+
+    /** A typo degrades to UPI with a warning, as DriverMatchingStrategyResolver does: the rider has already cancelled. */
+    private PaymentMethod cancellationFeeMethod() {
+        String configured = configurationService.getString(ConfigKeys.PAYMENT_CANCELLATION_FEE_METHOD,
+                DEFAULT_CANCELLATION_FEE_METHOD.name());
+        try {
+            return PaymentMethod.valueOf(configured.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException ex) {
+            log.warn("Unknown cancellation fee payment method '{}', falling back to {}", configured,
+                    DEFAULT_CANCELLATION_FEE_METHOD);
+            return DEFAULT_CANCELLATION_FEE_METHOD;
+        }
+    }
+
+    /** Returns the entity, not a response, so callers can finish their side effects before anything is mapped. */
+    private Ride transition(Ride ride, RideStatus target, java.util.function.Consumer<Instant> mutation) {
         RideStatus current = ride.getStatus();
         RideStateMachine.assertCanTransition(current, target);
 
@@ -129,7 +185,7 @@ public class RideLifecycleService {
 
         auditService.record(AuditEntities.RIDE, ride.getId(), AuditActions.RIDE_STATUS_CHANGED,
                 Map.of("status", current.name()), Map.of("status", target.name()));
-        return rideMapper.toResponse(saved);
+        return saved;
     }
 
     /** The assigned driver is resolved from the token, never from the request. */

@@ -40,6 +40,11 @@ public enum ErrorCode {
     COUPON_NOT_APPLICABLE(HttpStatus.UNPROCESSABLE_ENTITY),
     COUPON_EXHAUSTED(HttpStatus.UNPROCESSABLE_ENTITY),
 
+    // A declined payment is not an error but a FAILED row and a 200; these are the impossible requests.
+    PAYMENT_NOT_FOUND(HttpStatus.NOT_FOUND),
+    PAYMENT_ALREADY_SETTLED(HttpStatus.CONFLICT),
+    UNSUPPORTED_PAYMENT_METHOD(HttpStatus.BAD_REQUEST),
+
     PRICING_RULE_NOT_FOUND(HttpStatus.NOT_FOUND),
     PRICING_RULE_ALREADY_EXISTS(HttpStatus.CONFLICT),
     PRICING_RULE_INVALID(HttpStatus.BAD_REQUEST),

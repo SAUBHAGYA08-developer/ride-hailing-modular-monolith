@@ -110,6 +110,15 @@
   .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted); margin-top: 8px; }
   .legend span::before { content: "\25CF"; margin-right: 5px; font-size: 13px; }
   .hint { font-size: 11.5px; color: var(--muted); margin: -4px 0 10px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); gap: 10px; margin: 4px 0 12px; }
+  .tile { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--panel-2); }
+  .tile .n { font-family: var(--mono); font-size: 22px; font-weight: 600; line-height: 1.15; }
+  .tile .l { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-top: 4px; }
+  /* The two tiles the fleet page exists for: bookable, and the ghost gap beside it. */
+  .tile.hero { border-color: #2b4a80; background: #131d2e; }
+  .tile.hero .n { color: var(--accent); }
+  .tile.alarm { border-color: #6b4d12; background: #251d0f; }
+  .tile.alarm .n { color: var(--warn); }
   .tabs { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
   .tabs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
   .tabpane { display: none; }
@@ -127,7 +136,7 @@
   <button id="btnHealth">Ping backend</button>
   <span id="healthPill" class="pill muted">unknown</span>
   <div class="spacer"></div>
-  <span class="muted" style="font-size:12px">Dev seed data · logins come from the V14 migration</span>
+  <span class="muted" style="font-size:12px">Dev seed data · logins come from the V14 and V21 migrations</span>
 </header>
 
 <div id="globalBanner" class="banner err" style="margin: 16px 16px 0"></div>
@@ -196,7 +205,9 @@
         preset when you want to show a coupon actually applying.</p>
       <div class="row">
         <div class="field"><label>Car type</label>
-          <select id="carType"><option>SEDAN</option><option>HATCHBACK</option></select>
+          <select id="carType">
+            <option>SEDAN</option><option>HATCHBACK</option><option>AUTO</option><option>BIKE</option>
+          </select>
         </div>
         <div class="field"><label>Coupon</label>
           <select id="coupon">
@@ -208,6 +219,9 @@
         </div>
         <button id="btnEstimate">Get estimate</button>
       </div>
+      <p class="hint">Substitution never crosses a category family: a HATCHBACK may be upgraded to a SEDAN free of
+        charge, but AUTO and BIKE are only ever served by their own category — no car is sent to an auto request and
+        no auto to a bike request.</p>
       <p class="hint">"Get estimate" prices the real trip above and books nothing — no driver is held and no coupon
         use is taken. It is also where you check a coupon: one that cannot apply comes back as a reason on the
         estimate rather than as an error, so there is no fare to type in by hand.</p>
@@ -222,9 +236,19 @@
         <button id="btnMyRides" class="sm">My rides (rider)</button>
         <span class="muted mono" id="idemKeyLabel" style="font-size:11.5px"></span>
       </div>
+      <div class="row">
+        <button id="btnRiderPayments" class="sm">Payments of this ride (rider)</button>
+        <button id="btnRiderRetry" class="sm" title="A rider may read payments but never report that money arrived">
+          Retry as rider (expect 403)
+        </button>
+      </div>
+      <p class="hint">A rider holds PAYMENT_READ but not PAYMENT_COLLECT, so the retry answers 403 — shown in the
+        banner below rather than thrown. The cancellation fee is not on the ride's <span class="mono">payment</span>
+        field; it is a separate money line and only appears in this list.</p>
       <div id="riderBanner" class="banner err"></div>
       <div id="estimateCard"></div>
       <div id="rideCard"></div>
+      <div id="riderPayments"></div>
       <div id="riderRides"></div>
     </div>
 
@@ -246,12 +270,29 @@
         <button id="btnAutoPing">Auto-ping: off</button>
         <button id="btnDriverRides" class="sm">My rides (driver)</button>
       </div>
+      <div class="row">
+        <div class="field"><label>Payment method</label>
+          <select id="payMethod">
+            <option>CASH</option><option>UPI</option><option>CARD</option>
+            <option>WALLET</option><option>NETBANKING</option>
+          </select>
+        </div>
+        <button id="btnDriverPayments" class="sm">Payments of current ride</button>
+        <button id="btnRetryPayment" class="sm">Retry payment</button>
+      </div>
+      <p class="hint">Completing a ride collects the fare, so the method is mandatory on
+        <span class="mono">POST /rides/{id}/complete</span> — every Complete button on this page sends the one selected
+        here. A declined payment is not an error: the ride still completes and the payment comes back FAILED, which is
+        what "Retry payment" then re-collects, optionally on a different instrument. To force a decline, set
+        <span class="mono">payment.simulated.failure.methods</span> to a CSV of methods in the Configurations tab of
+        section 5 (<span class="mono">NONE</span> means all succeed).</p>
       <p class="hint">A position lives in Redis for <span class="mono">driver.location.ttl.seconds</span> (60 by default).
         Once it expires the driver falls out of matching and bookings answer <span class="mono">NO_DRIVER_IN_RADIUS</span> —
         keep auto-ping on while demonstrating. BUSY is never set by hand: the ride module flips it atomically when it
         claims a driver, and clears it on complete or cancel.</p>
       <div id="driverBanner" class="banner err"></div>
       <div id="driverProfile"></div>
+      <div id="driverPayments"></div>
       <div id="driverRides"></div>
     </div>
 
@@ -264,6 +305,10 @@
         <span style="color:var(--ok)">driver inside radius</span>
         <span style="color:#4a5566">driver outside radius</span>
       </div>
+      <p class="hint" style="margin-top:8px">The letter in each marker is the category — <span class="mono">S</span>
+        sedan, <span class="mono">H</span> hatchback, <span class="mono">A</span> auto, <span class="mono">B</span>
+        bike. Being inside the radius is not enough on its own: only a driver whose category may serve the request can
+        be matched, and AUTO and BIKE serve nothing but themselves.</p>
       <p class="hint" style="margin-top:8px">Distances are the same haversine the matcher uses. The dashed circle is
         <span class="mono">ride.search.radius.km</span> — load the configurations in section 5 to sync its real value.</p>
     </div>
@@ -277,6 +322,7 @@
         <button class="active" data-tab="cfg">Configurations</button>
         <button data-tab="rules">Pricing rules</button>
         <button data-tab="zones">Pricing zones</button>
+        <button data-tab="fleet">Fleet</button>
         <button data-tab="audit">Audit log</button>
       </div>
       <div id="adminBanner" class="banner err"></div>
@@ -314,8 +360,14 @@
             <div class="field"><label>Rate/km</label><input id="nrT3Rate" class="tiny" value="8"></div>
           </div>
           <div class="row">
+            <span class="muted" style="font-size:11.5px;width:100%">Every category needs a multiplier — pricing falls
+              back to ×1.00 when no row matches, which would silently charge a bike the sedan fare</span>
+          </div>
+          <div class="row">
             <div class="field"><label>SEDAN ×</label><input id="nrSedan" class="tiny" value="1.00"></div>
             <div class="field"><label>HATCHBACK ×</label><input id="nrHatch" class="tiny" value="0.90"></div>
+            <div class="field"><label>AUTO ×</label><input id="nrAuto" class="tiny" value="0.65"></div>
+            <div class="field"><label>BIKE ×</label><input id="nrBike" class="tiny" value="0.45"></div>
             <button id="btnCreateRule" class="primary sm">Create rule</button>
           </div>
         </details>
@@ -348,6 +400,30 @@
           </div>
         </details>
       </div>
+      <div class="tabpane" id="tab-fleet">
+        <div class="row">
+          <button id="btnLoadFleet" class="sm">Load fleet</button>
+          <div class="field"><label>Status filter</label>
+            <select id="fleetStatus">
+              <option value="">— all —</option>
+              <option>AVAILABLE</option><option>BUSY</option><option>OFFLINE</option>
+            </select>
+          </div>
+          <span class="muted" style="font-size:12px">admin only, authority
+            <span class="mono">DRIVER_FLEET_READ</span></span>
+        </div>
+        <p class="hint">Authorities are baked into the JWT at login, so an admin token minted before the
+          <span class="mono">DRIVER_FLEET_READ</span> migration ran will answer 403 here — log the admin out and back
+          in (section 1) and it works.</p>
+        <div id="fleetSummary"></div>
+        <div id="fleetTable"></div>
+        <p class="hint" style="margin-top:8px"><strong>Bookable</strong> is the only honest answer to "how many drivers
+          can take a ride right now": AVAILABLE, holding an active vehicle, and still reporting a live position in
+          Redis. AVAILABLE alone is MySQL's reservation state — a driver whose position expired past
+          <span class="mono">driver.location.ttl.seconds</span> stays AVAILABLE forever yet can never be matched. That
+          gap is <span class="mono">onDutyWithoutLiveLocation</span>, and it is the number an operator otherwise only
+          learns about from rider complaints.</p>
+      </div>
       <div class="tabpane" id="tab-audit">
         <div class="row">
           <div class="field"><label>Entity type</label><input id="auditEntity" placeholder="RIDE / DRIVER / …" style="width:150px"></div>
@@ -363,6 +439,7 @@
       <div class="row">
         <button id="btnRunDemo" class="primary">Full happy path</button>
         <button id="btnRunUpgrade">Car-type upgrade</button>
+        <button id="btnRunPayments">Payments walk-through</button>
         <button id="btnRunIdem">Idempotency</button>
         <button id="btnRunRateLimit">Rate limit</button>
       </div>
@@ -399,7 +476,9 @@ const ACCOUNTS = {
     { label: "Raj Kumar",    email: "raj.kumar@ridehailing.com",    password: "Driver@123", driverId: 1, lat: 12.9750, lng: 77.5990, carType: "SEDAN" },
     { label: "Amit Sharma",  email: "amit.sharma@ridehailing.com",  password: "Driver@123", driverId: 2, lat: 12.9820, lng: 77.6050, carType: "HATCHBACK" },
     { label: "Vikram Singh", email: "vikram.singh@ridehailing.com", password: "Driver@123", driverId: 3, lat: 12.9352, lng: 77.6245, carType: "SEDAN" },
-    { label: "Neha Verma",   email: "neha.verma@ridehailing.com",   password: "Driver@123", driverId: 4, lat: 12.9141, lng: 77.6788, carType: "HATCHBACK" }
+    { label: "Neha Verma",   email: "neha.verma@ridehailing.com",   password: "Driver@123", driverId: 4, lat: 12.9141, lng: 77.6788, carType: "HATCHBACK" },
+    { label: "Kiran Rao",    email: "kiran.rao@ridehailing.com",    password: "Driver@123", driverId: 5, lat: 12.9700, lng: 77.6040, carType: "AUTO" },
+    { label: "Suresh Babu",  email: "suresh.babu@ridehailing.com",  password: "Driver@123", driverId: 6, lat: 12.9780, lng: 77.5975, carType: "BIKE" }
   ],
   admin: [
     { label: "Platform Admin", email: "admin@ridehailing.com", password: "Admin@123" }
@@ -682,6 +761,11 @@ function renderRide() {
           : '<span class="muted">not assigned</span>') + '</span>'
       + '<span class="k">car</span><span>' + esc(r.assignedCarType || r.requestedCarType)
         + (r.vehicleId ? ' <span class="muted">· vehicleId ' + r.vehicleId + '</span>' : '') + '</span>'
+      // Both are snapshots written when the driver was claimed, so they are shown together or not at all.
+      + (r.driverPickupDistanceKm == null && r.estimatedPickupEtaMinutes == null ? ''
+          : '<span class="k">driver to pickup</span><span>' + num(r.driverPickupDistanceKm, 2) + ' km'
+            + ' <span class="muted">· ETA ' + (r.estimatedPickupEtaMinutes == null ? "—" : r.estimatedPickupEtaMinutes)
+            + ' min</span> <span class="pill muted">straight line, at assignment</span></span>')
       + '<span class="k">distance</span><span>' + num(r.distanceKm, 2) + ' km</span>'
       + '<span class="k">rule / zone</span><span class="mono">' + esc(f.pricingRuleCode || "—") + ' / ' + esc(f.pricingZoneCode || "—") + '</span>'
       + '<span class="k">distance fare</span><span>' + num(f.distanceFare) + '</span>'
@@ -705,8 +789,83 @@ function renderRide() {
             + '</strong>' + (Number(r.cancellationFee) === 0
                 ? ' <span class="pill ok">free — inside grace window</span>'
                 : ' <span class="pill warn">charged to rider</span>') + '</span>')
-    + '</div></div>';
+      + paymentRows(r.payment)
+    + '</div>'
+    + ((r.driverPickupDistanceKm == null && r.estimatedPickupEtaMinutes == null) ? ''
+        : '<p class="hint" style="margin:10px 0 0">"Driver to pickup" is a straight-line haversine snapshot taken at '
+          + 'assignment — not road distance, and not tracked live. It never changes as the driver moves.</p>')
+    + '</div>';
 }
+
+/** Null until completion, and a decline arrives as FAILED with a reason rather than as an error. */
+function paymentRows(p) {
+  if (!p) {
+    return '<span class="k">payment</span><span class="muted">none yet — collected when the driver completes</span>';
+  }
+  const failed = p.status === "FAILED";
+  return '<span class="k"><strong>payment</strong></span><span>'
+      + '<span class="pill ' + (failed ? "err" : "ok") + '">' + esc(p.status) + '</span> '
+      + esc(p.method) + ' <strong>' + num(p.amount) + '</strong>'
+      + ' <span class="muted">· ' + esc(p.purpose) + '</span></span>'
+    + '<span class="k">reference</span><span class="mono">' + esc(p.reference || "—") + '</span>'
+    + (failed
+        ? '<span class="k" style="color:var(--err)">declined because</span>'
+          + '<span style="color:var(--err)">' + esc(p.failureReason || "unknown")
+          + ' <span class="muted">— the ride still completed; use "Retry payment" in section 3</span></span>'
+        : '');
+}
+
+/** Purpose is the column that matters: the cancellation fee is a separate line, never the fare. */
+function renderPayments(target, rows, note) {
+  if (!rows.length) { $(target).innerHTML = '<p class="muted">no payments for this ride yet</p>'; return; }
+  $(target).innerHTML = '<div style="overflow:auto"><table style="margin-top:10px"><thead><tr>'
+    + '<th>Purpose</th><th>Method</th><th>Status</th><th class="num">Amount</th><th>Reference</th>'
+    + '<th>Failure reason</th></tr></thead><tbody>'
+    + rows.map(function (p) {
+        const failed = p.status === "FAILED";
+        return '<tr><td>' + esc(p.purpose) + '</td><td>' + esc(p.method) + '</td>'
+          + '<td><span class="pill ' + (failed ? "err" : "ok") + '">' + esc(p.status) + '</span></td>'
+          + '<td class="num">' + num(p.amount) + '</td>'
+          + '<td class="mono" style="font-size:11.5px">' + esc(p.reference || "—") + '</td>'
+          + '<td class="muted" style="font-size:11.5px">' + esc(p.failureReason || "—") + '</td></tr>';
+      }).join("")
+    + '</tbody></table></div>'
+    + (note ? '<p class="hint" style="margin-top:8px">' + esc(note) + '</p>' : '');
+}
+
+/** The instrument every Complete path on this page sends, driver-chosen at completion time. */
+function paymentMethod() { return $("#payMethod").value; }
+
+/** Same endpoint for both roles — the rider holds PAYMENT_READ too, so only the token differs. */
+async function loadPayments(role, bannerId, target) {
+  if (!requireSession(role, bannerId)) return [];
+  if (!state.ride) { banner(bannerId, "No ride in this session yet — book one in section 2.", "err"); return []; }
+  const res = await api(role, "GET", "/api/v1/rides/" + state.ride.id + "/payment");
+  if (!res.ok) { banner(bannerId, apiErrorText(res), "err"); return []; }
+  const rows = res.json.data || [];
+  renderPayments(target, rows, "Every money line of ride #" + state.ride.id
+    + " — a cancellation fee appears here as its own CANCELLATION_FEE row and never on the ride's payment field.");
+  banner(bannerId, rows.length + " payment line(s) on ride #" + state.ride.id + ".", "ok");
+  return rows;
+}
+
+$("#btnRiderPayments").addEventListener("click", function () {
+  loadPayments("rider", "#riderBanner", "#riderPayments").catch(showFatal);
+});
+
+// The 403 is the point of this button, so it is reported as an expected answer, not as a failure.
+$("#btnRiderRetry").addEventListener("click", async function () {
+  if (!requireSession("rider", "#riderBanner")) return;
+  if (!state.ride) { banner("#riderBanner", "No ride in this session yet.", "err"); return; }
+  try {
+    const res = await api("rider", "POST", "/api/v1/rides/" + state.ride.id + "/payment/retry",
+      { paymentMethod: paymentMethod() });
+    banner("#riderBanner", res.ok
+      ? "Unexpected — the rider was allowed to retry and the payment is " + res.json.data.status
+      : apiErrorText(res) + " — expected: a rider may read payments but not collect them.",
+      res.ok ? "err" : "ok");
+  } catch (e) { showFatal(e); }
+});
 
 /**
  * The fee column both rides tables share. A ride that was never cancelled has
@@ -977,15 +1136,46 @@ $("#driverRides").addEventListener("click", async function (ev) {
   const action = btn.dataset.rideAction;
   const rideId = btn.dataset.ride;
   try {
-    const body = action === "cancel" ? { reason: "Driver cancelled from the demo console" } : null;
+    // Complete carries the payment method; it is @NotNull, so an absent body is a 400.
+    const body = action === "cancel" ? { reason: "Driver cancelled from the demo console" }
+      : action === "complete" ? { paymentMethod: paymentMethod() }
+      : null;
     const res = await api("driver", "POST", "/api/v1/rides/" + rideId + "/" + action, body);
     if (!res.ok) { banner("#driverBanner", apiErrorText(res), "err"); return; }
-    banner("#driverBanner", "Ride #" + rideId + " → " + res.json.data.status, "ok");
+    const p = res.json.data.payment;
+    banner("#driverBanner", "Ride #" + rideId + " → " + res.json.data.status
+      + (p ? " · payment " + p.method + " " + p.status + (p.status === "FAILED"
+          ? " (" + (p.failureReason || "declined") + ") — retry it below" : "") : ""),
+      (p && p.status === "FAILED") ? "err" : "ok");
     if (state.ride && String(state.ride.id) === String(rideId)) {
       state.ride = res.json.data;
       renderRide();
     }
     await loadDriverRides();
+  } catch (e) { showFatal(e); }
+});
+
+$("#btnDriverPayments").addEventListener("click", function () {
+  loadPayments("driver", "#driverBanner", "#driverPayments").catch(showFatal);
+});
+
+$("#btnRetryPayment").addEventListener("click", async function () {
+  if (!requireSession("driver", "#driverBanner")) return;
+  if (!state.ride) { banner("#driverBanner", "No ride in this session yet — book one in section 2.", "err"); return; }
+  try {
+    const res = await api("driver", "POST", "/api/v1/rides/" + state.ride.id + "/payment/retry",
+      { paymentMethod: paymentMethod() });
+    if (!res.ok) { banner("#driverBanner", apiErrorText(res), "err"); return; }
+    const p = res.json.data;
+    // The retry answers with the payment alone, so the ride is re-read to keep the card in step.
+    const ride = await api("driver", "GET", "/api/v1/rides/" + state.ride.id);
+    if (ride.ok) { state.ride = ride.json.data; renderRide(); }
+    await loadPayments("driver", "#driverBanner", "#driverPayments");
+    banner("#driverBanner", "Retry on ride #" + state.ride.id + " → " + p.method + " " + p.status
+      + (p.status === "FAILED"
+          ? " (" + (p.failureReason || "declined") + ") — still declined, try another method"
+          : " — collected"),
+      p.status === "FAILED" ? "err" : "ok");
   } catch (e) { showFatal(e); }
 });
 
@@ -1129,8 +1319,11 @@ $("#btnCreateRule").addEventListener("click", async function () {
     tiers: [tier("#nrT1From", "#nrT1To", "#nrT1Rate"),
             tier("#nrT2From", "#nrT2To", "#nrT2Rate"),
             tier("#nrT3From", "#nrT3To", "#nrT3Rate")],
+    // All four categories: an omitted one falls back to ×1.00 and would price a bike as a sedan.
     carTypeMultipliers: [{ carType: "SEDAN", multiplier: Number($("#nrSedan").value) },
-                         { carType: "HATCHBACK", multiplier: Number($("#nrHatch").value) }]
+                         { carType: "HATCHBACK", multiplier: Number($("#nrHatch").value) },
+                         { carType: "AUTO", multiplier: Number($("#nrAuto").value) },
+                         { carType: "BIKE", multiplier: Number($("#nrBike").value) }]
   };
   try {
     const res = await api("admin", "POST", "/api/v1/pricing/rules", body);
@@ -1235,6 +1428,80 @@ $("#btnLoadAudit").addEventListener("click", function () {
     + (entity ? "&entityType=" + encodeURIComponent(entity) : ""), "#auditTable");
 });
 
+/* ------------------------- fleet / live drivers -------------------- */
+$("#btnLoadFleet").addEventListener("click", function () { loadFleet().catch(showFatal); });
+
+async function loadFleet() {
+  if (!requireSession("admin", "#adminBanner")) return null;
+  const status = $("#fleetStatus").value;
+  const res = await api("admin", "GET", "/api/v1/drivers/fleet?page=0&size=20"
+    + (status ? "&status=" + encodeURIComponent(status) : ""));
+  if (!res.ok) {
+    // A token minted before V19 has no DRIVER_FLEET_READ claim, and no amount of retrying fixes that.
+    banner("#adminBanner", apiErrorText(res) + (res.status === 403
+      ? " — this admin token was minted before DRIVER_FLEET_READ existed; log the admin out and in again (section 1)."
+      : ""), "err");
+    return null;
+  }
+  renderFleet(res.json.data);
+  banner("#adminBanner", "");
+  return res.json.data;
+}
+
+function renderFleet(d) {
+  const s = d.summary || {};
+  const byStatus = s.byStatus || {};
+  const available = Number(byStatus.AVAILABLE || 0);
+  const ghosts = Number(s.onDutyWithoutLiveLocation || 0);
+  const tile = function (n, label, cls) {
+    return '<div class="tile' + (cls ? " " + cls : "") + '">'
+      + '<div class="n">' + esc(n === undefined || n === null ? "—" : n) + '</div>'
+      + '<div class="l">' + esc(label) + '</div></div>';
+  };
+  $("#fleetSummary").innerHTML = '<div class="tiles">'
+      + tile(s.bookable, "bookable now", "hero")
+      + tile(ghosts, "on duty, no live position", ghosts > 0 ? "alarm" : "")
+      + tile(available, "available")
+      + tile(byStatus.BUSY || 0, "busy")
+      + tile(byStatus.OFFLINE || 0, "offline")
+      + tile(s.reportingLocation, "reporting location")
+      + tile(s.totalDrivers, "total drivers")
+      + tile((s.locationTtlSeconds || 0) + "s", "location ttl")
+    + '</div>'
+    + (ghosts > 0
+        ? '<div class="banner err show">' + ghosts + ' driver(s) are on duty in MySQL but invisible to dispatch — '
+          + 'AVAILABLE ' + available + ' against bookable ' + s.bookable + '. Their Redis position expired past '
+          + (s.locationTtlSeconds || 0) + 's, or they hold no active vehicle, so they can never be matched.</div>'
+        : '<div class="banner ok show">No ghosts — every on-duty driver is still reporting a live position, so '
+          + 'AVAILABLE and bookable agree.</div>');
+
+  const page = d.drivers || {};
+  const items = page.items || [];
+  $("#fleetTable").innerHTML = items.length
+    ? '<div style="overflow:auto"><table><thead><tr><th>Id</th><th>Driver</th><th>Status</th><th>Categories</th>'
+      + '<th class="num">Rating</th><th class="num">Rides</th><th>Position</th><th>Bookable</th>'
+      + '<th>Last status change</th></tr></thead><tbody>'
+      + items.map(function (r) {
+          const st = r.status === "AVAILABLE" ? "ok" : r.status === "BUSY" ? "warn" : "muted";
+          return '<tr><td class="mono">' + r.driverId + '</td><td>' + esc(r.fullName) + '</td>'
+            + '<td><span class="pill ' + st + '">' + esc(r.status) + '</span></td>'
+            + '<td class="muted">' + esc((r.activeCarTypes || []).join(", ") || "no active vehicle") + '</td>'
+            + '<td class="num">' + num(r.rating, 2) + '</td>'
+            + '<td class="num">' + r.totalRides + '</td>'
+            + '<td>' + (r.reportingLocation
+                ? '<span class="pill ok">live</span>' : '<span class="pill err">stale</span>') + '</td>'
+            + '<td>' + (r.bookable
+                ? '<span class="pill ok">yes</span>' : '<span class="pill muted">no</span>') + '</td>'
+            + '<td class="muted mono" style="font-size:11px">' + esc(r.lastLocationAt || "—") + '</td></tr>';
+        }).join("")
+      + '</tbody></table></div>'
+      + '<p class="hint" style="margin-top:8px">page ' + ((page.page || 0) + 1) + ' of ' + (page.totalPages || 1)
+      + ' · ' + (page.totalElements || 0) + ' row(s) matching the filter. The tiles above always cover the whole '
+      + 'fleet, never just this page. "Last status change" is the MySQL snapshot written when a driver went on or off '
+      + 'duty — it is not the last GPS ping, so only the Position column proves presence.</p>'
+    : '<p class="muted">no drivers match this filter</p>';
+}
+
 /** Flat table for admin read models: the column set follows the payload. */
 function renderGenericTable(rows) {
   if (!rows.length) return '<p class="muted">no rows</p>';
@@ -1321,8 +1588,11 @@ function drawMap() {
   drivers.forEach(function (d) {
     const km = haversineKm(pickup, d);
     const inside = km <= state.radiusKm;
-    parts.push('<circle cx="' + x(d.lng) + '" cy="' + y(d.lat) + '" r="6" fill="'
+    // Colour is radius, letter is category: a driver inside the radius still cannot serve another family.
+    parts.push('<circle cx="' + x(d.lng) + '" cy="' + y(d.lat) + '" r="7" fill="'
       + (inside ? "#2ecc71" : "#4a5566") + '"/>');
+    parts.push('<text x="' + x(d.lng) + '" y="' + (y(d.lat) + 3.5) + '" fill="#0a0d13" font-size="9.5"'
+      + ' font-weight="700" text-anchor="middle">' + esc(String(d.carType || "?").charAt(0)) + '</text>');
     parts.push(label(x(d.lng), y(d.lat) + 4,
       esc(d.label) + ' · ' + esc(d.carType) + ' · ' + km.toFixed(1) + ' km', "#8b95a7", 10));
   });
@@ -1484,13 +1754,20 @@ $("#btnRunDemo").addEventListener("click", async function () {
     if (!res.ok) { demoLog("start failed: " + apiErrorText(res), "err"); return; }
     state.ride = res.json.data; renderRide();
 
-    demoLog("· driver completes the ride");
-    res = await api("driver", "POST", "/api/v1/rides/" + ride.id + "/complete");
+    demoLog("· driver completes the ride and collects " + paymentMethod());
+    res = await api("driver", "POST", "/api/v1/rides/" + ride.id + "/complete",
+      { paymentMethod: paymentMethod() });
     if (!res.ok) { demoLog("complete failed: " + apiErrorText(res), "err"); return; }
     state.ride = res.json.data; renderRide();
     banner("#riderBanner", "Ride #" + state.ride.id + " is " + state.ride.status + ".", "ok");
     demoLog("  ride #" + ride.id + " " + state.ride.status + " · total "
       + num(state.ride.fare && state.ride.fare.totalFare) + " · driver released", "ok");
+    const paid = state.ride.payment;
+    if (paid) {
+      demoLog("  payment " + paid.method + " " + paid.status + " · " + num(paid.amount)
+        + (paid.status === "FAILED" ? " · declined: " + (paid.failureReason || "unknown") : " · " + paid.reference),
+        paid.status === "FAILED" ? "err" : "ok");
+    }
     await loadDriverRides();
   } catch (e) { demoLog(String(e.message || e), "err"); }
 });
@@ -1500,6 +1777,7 @@ $("#btnRunUpgrade").addEventListener("click", async function () {
   try {
     demoLog("· ask for a HATCHBACK; if only a SEDAN is free in radius the rider is upgraded free");
     demoLog("  (pick a SEDAN driver in section 1 — Raj Kumar or Vikram Singh — for this to trigger)");
+    demoLog("  AUTO and BIKE are never substituted, so Kiran Rao and Suresh Babu cannot serve this request");
     if (!await ensureDriverOnline()) return;
     if (!await ensureLogin("rider")) { demoLog("rider login failed", "err"); return; }
     $("#carType").value = "HATCHBACK";
@@ -1511,6 +1789,51 @@ $("#btnRunUpgrade").addEventListener("click", async function () {
     if (!ride.carTypeUpgraded) {
       demoLog("  no upgrade this run — a hatchback was available in radius, so nothing to upgrade");
     }
+  } catch (e) { demoLog(String(e.message || e), "err"); }
+});
+
+$("#btnRunPayments").addEventListener("click", async function () {
+  $("#demoOut").innerHTML = "";
+  try {
+    const method = paymentMethod();
+    demoLog("· book, start, complete with " + method + ", then read every money line back");
+    if (!await ensureDriverOnline()) return;
+    if (!await ensureLogin("rider")) { demoLog("rider login failed", "err"); return; }
+    // Asking for the signed-in driver's own category keeps the run deterministic across families.
+    $("#carType").value = selectedAccount("driver").carType;
+    demoLog("  asking for " + $("#carType").value + ", the category driver "
+      + $("#driverId").value + " actually drives");
+
+    const ride = await bookRide(false);
+    if (!ride) { demoLog("booking failed — open the request log for the error", "err"); return; }
+    if (!ride.driverId) { demoLog("no driver was assigned, stopping here", "err"); return; }
+    demoLog("  ride #" + ride.id + " " + ride.status + " · fare " + num(ride.fare && ride.fare.totalFare)
+      + " · driver " + num(ride.driverPickupDistanceKm, 2) + " km away, ETA "
+      + (ride.estimatedPickupEtaMinutes == null ? "—" : ride.estimatedPickupEtaMinutes) + " min", "ok");
+    demoLog("  payment is " + (ride.payment ? ride.payment.status : "null — money moves at completion, not at booking"));
+
+    let res = await api("driver", "POST", "/api/v1/rides/" + ride.id + "/start");
+    if (!res.ok) { demoLog("start failed: " + apiErrorText(res), "err"); return; }
+    demoLog("  " + res.json.data.status);
+
+    res = await api("driver", "POST", "/api/v1/rides/" + ride.id + "/complete", { paymentMethod: method });
+    if (!res.ok) { demoLog("complete failed: " + apiErrorText(res), "err"); return; }
+    state.ride = res.json.data; renderRide();
+    const p = state.ride.payment;
+    demoLog("  " + state.ride.status + " · payment " + (p ? p.method + " " + p.status + " · " + num(p.amount) : "missing"),
+      (p && p.status === "SUCCESS") ? "ok" : "err");
+    if (p && p.status === "FAILED") {
+      demoLog("  declined: " + (p.failureReason || "unknown")
+        + " — the ride still completed; press 'Retry payment' in section 3 or clear "
+        + "payment.simulated.failure.methods in the Configurations tab", "err");
+    }
+
+    const rows = await loadPayments("driver", "#driverBanner", "#driverPayments");
+    demoLog("· GET /rides/" + ride.id + "/payment → " + rows.length + " line(s)");
+    rows.forEach(function (row) {
+      demoLog("  " + row.purpose + " · " + row.method + " · " + row.status + " · " + num(row.amount)
+        + " · " + (row.reference || "no reference"));
+    });
   } catch (e) { demoLog(String(e.message || e), "err"); }
 });
 

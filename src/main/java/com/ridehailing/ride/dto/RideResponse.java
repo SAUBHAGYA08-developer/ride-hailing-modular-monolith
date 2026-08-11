@@ -2,6 +2,7 @@ package com.ridehailing.ride.dto;
 
 import com.ridehailing.common.domain.CarType;
 import com.ridehailing.driver.api.DriverSummary;
+import com.ridehailing.payment.api.PaymentSummary;
 import com.ridehailing.ride.entity.RideStatus;
 
 import java.math.BigDecimal;
@@ -41,5 +42,11 @@ public record RideResponse(Long id,
                             * snapshot and never changes after creation, whereas
                             * this is decided at cancellation time.
                             */
-                           BigDecimal cancellationFee) {
+                           BigDecimal cancellationFee,
+                           /** The fare payment, null until completion; a decline shows as FAILED with its reason. */
+                           PaymentSummary payment,
+                           /** Straight-line km at assignment time, not road distance and not live. */
+                           BigDecimal driverPickupDistanceKm,
+                           /** Rounded up: an ETA that rounds down promises a driver who cannot arrive that soon. */
+                           Integer estimatedPickupEtaMinutes) {
 }

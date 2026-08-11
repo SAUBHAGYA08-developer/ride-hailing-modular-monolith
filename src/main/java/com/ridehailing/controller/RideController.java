@@ -6,6 +6,7 @@ import com.ridehailing.common.web.RequestContext;
 import com.ridehailing.ratelimit.RateLimitPolicy;
 import com.ridehailing.ratelimit.RateLimited;
 import com.ridehailing.ride.dto.CancelRideRequest;
+import com.ridehailing.ride.dto.CompleteRideRequest;
 import com.ridehailing.ride.dto.CreateRideRequest;
 import com.ridehailing.ride.dto.RideResponse;
 import com.ridehailing.ride.service.RideBookingService;
@@ -64,10 +65,12 @@ public class RideController {
         return ApiResponse.ok(rideLifecycleService.start(rideId, CurrentUser.require()));
     }
 
+    /** RIDE_COMPLETE alone: collecting the fare is part of ending the ride, and PAYMENT_COLLECT guards the retry endpoint. */
     @PostMapping("/rides/{rideId}/complete")
     @PreAuthorize("hasAuthority('RIDE_COMPLETE')")
-    public ApiResponse<RideResponse> complete(@PathVariable Long rideId) {
-        return ApiResponse.ok(rideLifecycleService.complete(rideId, CurrentUser.require()));
+    public ApiResponse<RideResponse> complete(@PathVariable Long rideId,
+                                              @Valid @RequestBody CompleteRideRequest request) {
+        return ApiResponse.ok(rideLifecycleService.complete(rideId, CurrentUser.require(), request.paymentMethod()));
     }
 
     @PostMapping("/rides/{rideId}/cancel")

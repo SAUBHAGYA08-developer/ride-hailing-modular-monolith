@@ -10,6 +10,10 @@ public final class AuditActions {
     public static final String RIDE_CREATED = "RIDE_CREATED";
     public static final String RIDE_STATUS_CHANGED = "RIDE_STATUS_CHANGED";
 
+    /** Filed against the Ride entity, so the money shows on the same timeline as the status changes that caused it. */
+    public static final String PAYMENT_COLLECTED = "PAYMENT_COLLECTED";
+    public static final String PAYMENT_FAILED = "PAYMENT_FAILED";
+
     public static final String COUPON_CREATED = "COUPON_CREATED";
     public static final String COUPON_STATUS_CHANGED = "COUPON_STATUS_CHANGED";
     public static final String COUPON_REDEEMED = "COUPON_REDEEMED";

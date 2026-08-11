@@ -55,6 +55,11 @@ public class Ride extends BaseEntity {
     @Column(name = "assigned_car_type", length = 20)
     private CarType assignedCarType;
 
+    /** Straight-line haversine km from the Redis GEO search, not road distance, so it reads lower than the real approach. */
+    // A snapshot taken at assignment, not live: a live figure needs its own endpoint reading the driver's current position.
+    @Column(name = "driver_pickup_distance_km", precision = 6, scale = 2)
+    private BigDecimal driverPickupDistanceKm;
+
     @Column(name = "pickup_latitude", nullable = false, precision = 10, scale = 7, updatable = false)
     private BigDecimal pickupLatitude;
 

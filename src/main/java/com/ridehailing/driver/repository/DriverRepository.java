@@ -2,7 +2,11 @@ package com.ridehailing.driver.repository;
 
 import com.ridehailing.common.domain.CarType;
 import com.ridehailing.driver.api.AvailableDriver;
+import com.ridehailing.driver.api.DriverStatusCount;
 import com.ridehailing.driver.entity.Driver;
+import com.ridehailing.driver.entity.DriverStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -33,6 +37,63 @@ public interface DriverRepository extends JpaRepository<Driver, Long> {
 
     /** Source rows for the Redis GEO warm-up after a cache restart. */
     List<Driver> findByLastKnownLatitudeIsNotNullAndLastKnownLongitudeIsNotNull();
+
+    /**
+     * Fleet headcount per reservation status, straight out of a GROUP BY.
+     *
+     * The fleet endpoint must not count its own page: totals have to hold for
+     * page 5 of 40 exactly as they do for page 0. Statuses with no drivers are
+     * simply absent from the result and the caller fills them in with zero.
+     */
+    @Query("""
+            select new com.ridehailing.driver.api.DriverStatusCount(d.status, count(d.id))
+            from Driver d
+            group by d.status
+            """)
+    List<DriverStatusCount> countByStatus();
+
+    /**
+     * The fleet listing. Ordered by id rather than left to the database's whim:
+     * an unordered page is not stable, so an operator paging through the fleet
+     * could otherwise see a driver twice and miss another entirely.
+     */
+    Page<Driver> findAllByOrderByIdAsc(Pageable pageable);
+
+    Page<Driver> findByStatusOrderByIdAsc(DriverStatus status, Pageable pageable);
+
+    /**
+     * Drivers MySQL considers claimable: AVAILABLE and owning at least one active
+     * vehicle. Presence in Redis is deliberately not part of this - the caller
+     * intersects this set with the live set to get the bookable count, because
+     * the two facts live in two different stores and only the caller holds both.
+     *
+     * {@code distinct} matters: two active vehicles must not make one driver
+     * count twice.
+     */
+    @Query("""
+            select distinct d.id
+            from Driver d
+            join Vehicle v on v.driverId = d.id
+            where d.status = com.ridehailing.driver.entity.DriverStatus.AVAILABLE
+              and v.active = true
+            """)
+    List<Long> findAvailableDriverIdsWithActiveVehicle();
+
+    /**
+     * How many of the given drivers MySQL still considers on duty. Used to size
+     * the divergence between the two stores: on-duty total minus this is the
+     * number of drivers who look ready in MySQL but are invisible to dispatch.
+     *
+     * Callers must skip this for an empty collection rather than send an empty
+     * IN list.
+     */
+    @Query("""
+            select count(d.id)
+            from Driver d
+            where d.id in :driverIds
+              and d.status <> com.ridehailing.driver.entity.DriverStatus.OFFLINE
+            """)
+    long countOnDutyIn(@Param("driverIds") Collection<Long> driverIds);
 
     /**
      * Resolves Redis proximity hits against the authoritative availability

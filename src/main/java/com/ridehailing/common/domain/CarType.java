@@ -1,7 +1,9 @@
 package com.ridehailing.common.domain;
 
-/** Vehicle categories the platform sells. Shared by driver, ride and pricing. */
+/** Vehicle categories the platform sells; substitution rules live in {@link CarTypePolicy}. */
 public enum CarType {
     SEDAN,
-    HATCHBACK
+    HATCHBACK,
+    AUTO,
+    BIKE
 }

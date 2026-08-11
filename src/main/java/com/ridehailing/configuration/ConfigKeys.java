@@ -27,6 +27,10 @@ public final class ConfigKeys {
     public static final String CANCELLATION_FEE_AMOUNT = "ride.cancellation.fee.amount";
     public static final String CANCELLATION_FEE_GRACE_SECONDS = "ride.cancellation.fee.grace.seconds";
     public static final String BOOKING_LOCK_TTL_SECONDS = "ride.booking.lock.ttl.seconds";
+    public static final String PICKUP_AVERAGE_SPEED_KMPH = "ride.pickup.average.speed.kmph";
+
+    public static final String PAYMENT_SIMULATED_FAILURE_METHODS = "payment.simulated.failure.methods";
+    public static final String PAYMENT_CANCELLATION_FEE_METHOD = "payment.cancellation.fee.method";
 
     private ConfigKeys() {
     }
