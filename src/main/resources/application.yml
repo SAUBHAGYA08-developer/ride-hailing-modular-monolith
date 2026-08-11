@@ -1,6 +1,10 @@
 server:
   # PORT is injected by the host platform and wins; SERVER_PORT stays for local overrides.
   port: ${PORT:${SERVER_PORT:8080}}
+  tomcat:
+    threads:
+      # 200 idle thread stacks are pure waste on a small container; lower it there.
+      max: ${TOMCAT_MAX_THREADS:200}
   error:
     whitelabel:
       enabled: false
@@ -17,12 +21,12 @@ spring:
     hikari:
       pool-name: ridehailing-pool
       maximum-pool-size: ${DB_POOL_SIZE:20}
-      minimum-idle: 5
+      minimum-idle: ${DB_POOL_MIN_IDLE:5}
       connection-timeout: 10000
 
   jpa:
     open-in-view: false
-    show-sql: true
+    show-sql: ${SHOW_SQL:true}
     hibernate:
       # Flyway is the single source of truth for schema. Hibernate never touches DDL.
       # Do not set this to update: Hibernate cannot create the module schemas
@@ -59,9 +63,9 @@ spring:
       lettuce:
         pool:
           enabled: true
-          max-active: 16
-          max-idle: 8
-          min-idle: 2
+          max-active: ${REDIS_POOL_MAX:16}
+          max-idle: ${REDIS_POOL_MAX_IDLE:8}
+          min-idle: ${REDIS_POOL_MIN_IDLE:2}
 
   jackson:
     default-property-inclusion: non_null

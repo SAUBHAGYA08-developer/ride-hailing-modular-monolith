@@ -21,5 +21,7 @@ USER spring
 ENV SERVER_PORT=8080
 EXPOSE 8080
 
-# Percentage, not a fixed heap: the container memory limit is the only number known here.
-ENTRYPOINT ["sh", "-c", "exec java -XX:MaxRAMPercentage=75 -jar /app/app.jar"]
+# Sized for a 512Mi container: heap, metaspace and thread stacks must all fit, not just the heap.
+# SerialGC because G1's region bookkeeping is wasted overhead on a heap this small.
+ENV JAVA_OPTS="-Xmx256m -Xms128m -XX:MaxMetaspaceSize=128m -XX:ReservedCodeCacheSize=48m -Xss512k -XX:+UseSerialGC -XX:+ExitOnOutOfMemoryError"
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]
