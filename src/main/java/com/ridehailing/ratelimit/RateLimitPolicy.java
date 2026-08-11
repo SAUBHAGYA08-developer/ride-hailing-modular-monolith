@@ -12,6 +12,9 @@ public enum RateLimitPolicy {
     DRIVER_LOCATION(ConfigKeys.RATE_LIMIT_LOCATION_MAX, ConfigKeys.RATE_LIMIT_LOCATION_WINDOW_SECONDS, 60, 60, Subject.PRINCIPAL),
     LOGIN(ConfigKeys.RATE_LIMIT_LOGIN_MAX, ConfigKeys.RATE_LIMIT_LOGIN_WINDOW_SECONDS, 5, 60, Subject.IP),
     COUPON_VALIDATE(ConfigKeys.RATE_LIMIT_COUPON_MAX, ConfigKeys.RATE_LIMIT_COUPON_WINDOW_SECONDS, 20, 60, Subject.PRINCIPAL),
+    // Far higher than RIDE_CREATE: a rider books once but re-prices the trip on
+    // every pin drag, and a quote reserves nothing.
+    PRICING_QUOTE(ConfigKeys.RATE_LIMIT_QUOTE_MAX, ConfigKeys.RATE_LIMIT_QUOTE_WINDOW_SECONDS, 60, 60, Subject.PRINCIPAL),
     ADMIN_API(ConfigKeys.RATE_LIMIT_ADMIN_MAX, ConfigKeys.RATE_LIMIT_ADMIN_WINDOW_SECONDS, 30, 60, Subject.PRINCIPAL);
 
     public enum Subject {

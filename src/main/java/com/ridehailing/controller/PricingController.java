@@ -1,14 +1,18 @@
 package com.ridehailing.controller;
 
 import com.ridehailing.common.api.ApiResponse;
+import com.ridehailing.pricing.dto.FareEstimateRequest;
+import com.ridehailing.pricing.dto.FareEstimateResponse;
 import com.ridehailing.pricing.dto.PricingRuleRequest;
 import com.ridehailing.pricing.dto.PricingZoneRequest;
 import com.ridehailing.pricing.dto.PricingZoneResponse;
 import com.ridehailing.pricing.dto.PricingRuleResponse;
+import com.ridehailing.pricing.service.FareEstimateService;
 import com.ridehailing.pricing.service.PricingRuleService;
 import com.ridehailing.pricing.service.PricingZoneService;
 import com.ridehailing.ratelimit.RateLimitPolicy;
 import com.ridehailing.ratelimit.RateLimited;
+import com.ridehailing.security.CurrentUser;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -31,6 +35,23 @@ public class PricingController {
 
     private final PricingRuleService pricingRuleService;
     private final PricingZoneService pricingZoneService;
+    private final FareEstimateService fareEstimateService;
+
+    /**
+     * The only rider facing endpoint here. It prices a trip without booking it:
+     * no driver is reserved and no coupon use is taken, which is why a client is
+     * free to call it on every map drag and why an unusable coupon comes back as
+     * a reason on a 200 rather than as an error.
+     *
+     * The rider comes from the token, never from the body: per user coupon
+     * limits are counted against whoever is signed in.
+     */
+    @PostMapping("/quote")
+    @PreAuthorize("hasAuthority('PRICING_READ')")
+    @RateLimited(RateLimitPolicy.PRICING_QUOTE)
+    public ApiResponse<FareEstimateResponse> quote(@Valid @RequestBody FareEstimateRequest request) {
+        return ApiResponse.ok(fareEstimateService.estimate(request, CurrentUser.require().userId()));
+    }
 
     @GetMapping("/rules")
     @PreAuthorize("hasAuthority('PRICING_READ')")

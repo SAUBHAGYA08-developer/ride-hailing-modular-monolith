@@ -22,6 +22,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
@@ -130,18 +131,38 @@ public class DriverService {
         if (status == DriverStatus.OFFLINE) {
             driverLocationService.removeLocation(driverId);
         } else {
-            // Keep the recovery snapshot current while the driver is bookable,
-            // so a Redis restart can repopulate the GEO set.
-            driverLocationService.currentPosition(driverId).ifPresent(point ->
-                    driverRepository.updateLocationSnapshot(driverId,
-                            java.math.BigDecimal.valueOf(point.getY()),
-                            java.math.BigDecimal.valueOf(point.getX()),
-                            Instant.now(), CurrentUser.actorName()));
+            captureLocationSnapshot(driverId);
         }
 
         auditService.record(AuditEntities.DRIVER, driverId, AuditActions.DRIVER_STATUS_CHANGED,
                 Map.of("status", current.name()), Map.of("status", status.name()));
         return toResponse(saved);
+    }
+
+    /**
+     * Copies the driver's live Redis position into the MySQL recovery snapshot,
+     * so a Redis restart can repopulate the GEO set from something recent.
+     *
+     * Called at the low frequency moments of a driver's day - going online, and
+     * finishing a ride - never on a GPS ping, which must not touch MySQL at all.
+     * The position is always read from Redis: a ride's drop coordinates are what
+     * the rider asked for, not evidence of where the car actually is.
+     *
+     * The snapshot only feeds warm-up, so a Redis outage must not fail the ride
+     * transition this runs inside. Swallowing the exception here is safe because
+     * this method opens no transaction of its own: nothing gets marked rollback
+     * only on the way out.
+     */
+    public void captureLocationSnapshot(Long driverId) {
+        try {
+            driverLocationService.currentPosition(driverId).ifPresent(point ->
+                    driverRepository.updateLocationSnapshot(driverId,
+                            BigDecimal.valueOf(point.getY()),
+                            BigDecimal.valueOf(point.getX()),
+                            Instant.now(), CurrentUser.actorName()));
+        } catch (RuntimeException ex) {
+            log.warn("Could not capture the location snapshot for driver {}", driverId, ex);
+        }
     }
 
     private Driver requireDriver(Long driverId) {

@@ -5,8 +5,10 @@ import com.ridehailing.common.api.ApiResponse;
 import com.ridehailing.common.error.ErrorCode;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -97,6 +99,20 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(NoHandlerFoundException.class)
     public ResponseEntity<ApiResponse<Void>> handleNoHandler(NoHandlerFoundException ex) {
         return respond(ErrorCode.MALFORMED_REQUEST, "No handler for " + ex.getRequestURL(), null);
+    }
+
+    /**
+     * Redis or MySQL unreachable, or a command that timed out. The request was
+     * well formed and may succeed on a retry, so reporting it as an internal
+     * error would be wrong twice over: the client cannot tell it is worth
+     * retrying, and genuine bugs get buried among infrastructure blips in the
+     * 500 bucket.
+     */
+    @ExceptionHandler({DataAccessResourceFailureException.class, QueryTimeoutException.class})
+    public ResponseEntity<ApiResponse<Void>> handleDependencyUnavailable(Exception ex) {
+        log.error("A dependency is unavailable", ex);
+        return respond(ErrorCode.DEPENDENCY_UNAVAILABLE,
+                "A dependency is temporarily unavailable, please retry", null);
     }
 
     @ExceptionHandler(Exception.class)

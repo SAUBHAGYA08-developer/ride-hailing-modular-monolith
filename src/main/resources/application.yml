@@ -20,6 +20,7 @@ spring:
 
   jpa:
     open-in-view: false
+    show-sql: true
     hibernate:
       # Flyway is the single source of truth for schema. Hibernate never touches DDL.
       # Do not set this to update: Hibernate cannot create the module schemas

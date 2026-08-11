@@ -90,7 +90,8 @@ public interface DriverRepository extends JpaRepository<Driver, Long> {
     /**
      * Persists the recovery snapshot without bumping {@code version}: a
      * position write must never invalidate a candidate the booking flow is
-     * about to reserve. Called on status changes only, never on a GPS ping.
+     * about to reserve. Called when a driver goes online and when a ride ends,
+     * never on a GPS ping - see DriverService#captureLocationSnapshot.
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query(value = "UPDATE driver_schema.drivers SET last_known_latitude = :latitude, "

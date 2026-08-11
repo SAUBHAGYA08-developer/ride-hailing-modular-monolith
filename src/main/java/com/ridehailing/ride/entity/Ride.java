@@ -139,4 +139,13 @@ public class Ride extends BaseEntity {
 
     @Column(name = "cancellation_reason", length = 255)
     private String cancellationReason;
+
+    /**
+     * What the rider owes for cancelling, decided by CancellationFeePolicy and
+     * frozen here. Null on a ride that was never cancelled, zero on a free one.
+     * total_fare is deliberately left untouched: it stays the quoted price of
+     * the trip that did not happen.
+     */
+    @Column(name = "cancellation_fee", precision = 10, scale = 2)
+    private BigDecimal cancellationFee;
 }

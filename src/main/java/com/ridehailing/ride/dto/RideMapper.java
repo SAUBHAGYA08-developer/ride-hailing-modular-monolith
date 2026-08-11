@@ -38,6 +38,6 @@ public class RideMapper {
                 ride.getDropLatitude(), ride.getDropLongitude(), ride.getDropAddress(), fare,
                 ride.getRequestedAt(), ride.getAssignedAt(), ride.getStartedAt(), ride.getCompletedAt(),
                 ride.getCancelledAt(), ride.getCancelledBy() == null ? null : ride.getCancelledBy().name(),
-                ride.getCancellationReason());
+                ride.getCancellationReason(), ride.getCancellationFee());
     }
 }

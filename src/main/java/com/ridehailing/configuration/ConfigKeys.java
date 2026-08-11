@@ -17,11 +17,15 @@ public final class ConfigKeys {
     public static final String RATE_LIMIT_LOGIN_WINDOW_SECONDS = "api.rate-limit.login.window.seconds";
     public static final String RATE_LIMIT_COUPON_MAX = "api.rate-limit.coupon.max";
     public static final String RATE_LIMIT_COUPON_WINDOW_SECONDS = "api.rate-limit.coupon.window.seconds";
+    public static final String RATE_LIMIT_QUOTE_MAX = "api.rate-limit.quote.max";
+    public static final String RATE_LIMIT_QUOTE_WINDOW_SECONDS = "api.rate-limit.quote.window.seconds";
     public static final String RATE_LIMIT_ADMIN_MAX = "api.rate-limit.admin.max";
     public static final String RATE_LIMIT_ADMIN_WINDOW_SECONDS = "api.rate-limit.admin.window.seconds";
 
     public static final String IDEMPOTENCY_TTL_SECONDS = "idempotency.ttl.seconds";
     public static final String RIDE_CANCELLATION_ALLOWED_STATUSES = "ride.cancellation.allowed.statuses";
+    public static final String CANCELLATION_FEE_AMOUNT = "ride.cancellation.fee.amount";
+    public static final String CANCELLATION_FEE_GRACE_SECONDS = "ride.cancellation.fee.grace.seconds";
     public static final String BOOKING_LOCK_TTL_SECONDS = "ride.booking.lock.ttl.seconds";
 
     private ConfigKeys() {

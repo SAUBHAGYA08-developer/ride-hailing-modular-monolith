@@ -34,5 +34,12 @@ public record RideResponse(Long id,
                            Instant completedAt,
                            Instant cancelledAt,
                            String cancelledBy,
-                           String cancellationReason) {
+                           String cancellationReason,
+                           /**
+                            * Null unless the ride was cancelled. Kept out of
+                            * FareSummary on purpose: that record is the pricing
+                            * snapshot and never changes after creation, whereas
+                            * this is decided at cancellation time.
+                            */
+                           BigDecimal cancellationFee) {
 }

@@ -54,6 +54,8 @@ public enum ErrorCode {
     DATA_INTEGRITY_VIOLATION(HttpStatus.CONFLICT),
 
     RATE_LIMIT_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS),
+
+    DEPENDENCY_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE),
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR);
 
     private final HttpStatus httpStatus;

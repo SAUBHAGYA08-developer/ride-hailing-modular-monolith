@@ -37,6 +37,14 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/v1/users").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/drivers").permitAll()
                         .requestMatchers("/actuator/health").permitAll()
+                        // Static demo console and architecture page. Listed one
+                        // by one rather than as a wildcard so this rule can be
+                        // audited at a glance. Neither page carries privilege of
+                        // its own: the console's every call still needs a JWT
+                        // and is authorised by the rules above, and the
+                        // architecture page is documentation that calls nothing.
+                        .requestMatchers(HttpMethod.GET,
+                                "/", "/index.html", "/architecture.html", "/favicon.ico").permitAll()
                         .anyRequest().authenticated())
                 .exceptionHandling(handling -> handling
                         .authenticationEntryPoint(securityErrorResponder)

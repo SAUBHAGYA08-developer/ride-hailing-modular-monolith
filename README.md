@@ -35,6 +35,9 @@ coordination.
 14. [API reference](#14-api-reference)
 15. [Rules for future changes](#15-rules-for-future-changes)
 16. [Not implemented yet](#16-not-implemented-yet)
+17. [Assumptions](#17-assumptions)
+18. [What I would do differently with more time](#18-what-i-would-do-differently-with-more-time)
+19. [How AI was used](#19-how-ai-was-used)
 
 ---
 
@@ -693,6 +696,47 @@ The implementation is selected at runtime from `matching.strategy`. Adding
 `HighestRatedDriverMatchingStrategy` means adding one `@Component` and one
 configuration value — no `if/else` in the booking service.
 
+### Fare estimate — pricing without booking
+
+`POST /pricing/quote` prices a trip nobody has booked. `PRICING_READ` is enough, and
+the `USER` role already holds it, so riders can call it directly.
+
+Without it, a rider only learned the price from the `POST /rides` response — after a
+driver had been claimed, marked `BUSY`, and the coupon redeemed. **Price discovery
+cost a driver reservation**, and after the cancellation fee was added it could cost
+the rider ₹30 as well. It also meant a rider could not compare car types, could not
+check a coupon without a fare to type in by hand, and saw surge only once already
+committed.
+
+`FareEstimateService` sits in front of `PricingService.quote(...)`, which is already
+`@Transactional(readOnly = true)` and side-effect free — no driver reserved, no
+coupon consumed, no ride row written. Verified by comparing `COUNT(*)` on `rides`
+before and after.
+
+Two decisions worth naming:
+
+* **A rejected coupon is data, not an error.** `CouponService.evaluate` throws for an
+  unusable coupon, and `quote()` calls it directly, so passing a bad coupon to
+  `quote()` throws. An estimate must never fail because of a coupon — the rider asked
+  what the *trip* costs. So the five coupon rejections (`COUPON_NOT_FOUND`,
+  `_INACTIVE`, `_EXPIRED`, `_NOT_APPLICABLE`, `_EXHAUSTED`) are caught, the trip is
+  quoted again without the coupon, and the rejection is returned as
+  `couponApplicable: false` plus the reason on a **200**. Anything else `quote()` can
+  raise — an unpriceable trip, a missing rule — is a genuine fault and still surfaces
+  as an error.
+* **`FareEstimateService` is deliberately *not* `@Transactional`.** If it were, the
+  first attempt's rejection would mark that transaction rollback-only, and the commit
+  after the successful second attempt would die with `UnexpectedRollbackException`.
+  Calling through the injected `PricingService` proxy gives each attempt its own
+  read-only transaction — the same way `RideBookingService` already calls `quote()`.
+
+It has its own rate limit (`PRICING_QUOTE`, 60/min/user) rather than reusing the
+booking limit of 10/min: a real client calls this on every map drag.
+
+Verified end to end: a 28 km trip with `WELCOME10` estimates **143.13**, and booking
+the identical trip charges **143.13**. An estimate that does not match the booking
+that follows it is worse than no estimate.
+
 ---
 
 ## 12. Ride lifecycle
@@ -721,8 +765,66 @@ Side effects:
 * **complete** — assigned driver or ADMIN; sets `completed_at`; driver goes
   `BUSY → AVAILABLE` and `total_rides` increments atomically.
 * **cancel** — rider, assigned driver, or ADMIN; releases the driver back to
-  `AVAILABLE` and reverses the coupon redemption so the rider gets the use back.
-  `cancelled_by` is derived from the authenticated role, never from the request body.
+  `AVAILABLE`, reverses the coupon redemption so the rider gets the use back, and
+  decides a cancellation fee (below). `cancelled_by` is derived from the
+  authenticated role, never from the request body.
+
+Both **complete** and **cancel** also copy the driver's current Redis position into
+`drivers.last_known_*`, so a Redis restart warms the GEO set from where each driver
+actually finished rather than from wherever they last changed status.
+
+### Cancellation fee
+
+`ride.CancellationFeePolicy` is the only place that decides whether a cancellation
+costs anything. It is a pure function — no clock, no database, no Spring context —
+so the rule is readable and testable on its own.
+
+| Input | Source |
+|---|---|
+| who cancelled | `cancelled_by`, derived from the token |
+| status before cancelling | the ride's status when `cancel` was called |
+| how long the driver was held | `now − assigned_at` |
+| fee amount | `ride.cancellation.fee.amount` (default `30.00`) |
+| grace window | `ride.cancellation.fee.grace.seconds` (default `120`) |
+
+The fee is charged only when **all** of these hold; otherwise it is `0.00`:
+
+1. `cancelled_by = USER`. A driver or ADMIN cancellation is always free — a rider
+   must not pay for someone else changing their mind.
+2. The ride was `DRIVER_ASSIGNED`. Before assignment nobody was dispatched, so
+   there is no cost to recover.
+3. `now − assigned_at >= grace`. An immediate change of mind is free.
+
+Decisions worth naming, none of which the requirements specify:
+
+* **Flat, not a percentage of the fare.** What is recovered is the driver's wasted
+  approach to the pickup, which does not grow with the length of the trip the
+  rider abandoned.
+* **`total_fare` is never touched.** It stays the quoted price of a trip that did
+  not happen; the fee is its own `rides.cancellation_fee` column. Overwriting the
+  fare would destroy the record of what the rider had agreed to pay, and the
+  pricing snapshot is documented as immutable after creation.
+* **Stored, not derived on read.** Raising the configured amount next month must
+  not change what a rider was charged last month — the same reasoning as the fare
+  snapshot.
+* **A column, not a table.** One cancellation per ride means one fee, so this is
+  strictly 1:1 with the ride row. It becomes a row in a `ride_charges` ledger the
+  day a second money line item exists (waiting charge, toll, tip, commission,
+  driver payout) — see the earnings gap in section 16.
+* **Zero versus null.** `null` means the ride was never cancelled; `0.00` means it
+  was cancelled and the policy decided it was free. Worth keeping distinct for
+  anyone auditing later.
+
+`cancellationFee` is exposed at the top level of `RideResponse` rather than inside
+`FareSummary`, because `FareSummary` is the pricing snapshot and is contractually
+frozen at creation, whereas this value is decided at cancellation time.
+
+A non-zero fee is written to the audit trail; a free cancellation is not, because
+it is not a financial event.
+
+Verified against a running instance: rider inside grace → `0.00`; driver cancel past
+grace → `0.00`; rider past grace → `30.00`; `total_fare` unchanged at `50.00` in all
+three.
 
 ---
 
@@ -766,6 +868,7 @@ Exceeding a limit returns `429` with a `Retry-After` header.
 | `DRIVER_LOCATION` | 60 / min | driver (1:1 with user) |
 | `LOGIN` | 5 / min | client IP |
 | `COUPON_VALIDATE` | 20 / min | user |
+| `PRICING_QUOTE` | 60 / min | user |
 | `ADMIN_API` | 30 / min | admin |
 
 All limits are DB-configurable; the Java constants are only fallbacks used when
@@ -833,6 +936,7 @@ All paths are prefixed `/api/v1`. All responses use the envelope above.
 | POST | `/coupons` | `COUPON_CREATE` | ADMIN | |
 | DELETE | `/coupons/{id}` | `COUPON_DELETE` | ADMIN | **soft delete** → `INACTIVE` |
 | POST | `/coupons/{code}/validate` | `COUPON_VALIDATE` | user from token | rate limited; never throws |
+| POST | `/pricing/quote` | `PRICING_READ` | rider = token | fare estimate; books nothing; an unusable coupon comes back as a reason on a 200 |
 | GET | `/pricing/rules` | `PRICING_READ` | | |
 | POST | `/pricing/rules` | `PRICING_CREATE` | ADMIN | |
 | PUT | `/pricing/rules/{id}` | `PRICING_UPDATE` | ADMIN | never affects existing rides |
@@ -967,9 +1071,189 @@ Known gaps, listed so nobody assumes they exist:
   gated by `surge.enabled`; there is no demand-based engine that adjusts it.
 * **No expired-idempotency-record sweeper.** The `idx_idempotency_expires` index is
   in place for one, but no scheduled cleanup job runs.
-* **No rider-facing driver ETA / live tracking endpoint.**
-* **Verified end to end on MySQL 9.7 + Redis 7** (Homebrew, not Docker): all 14
+* **No ETA, and that is a decision rather than an omission.** Neither the driver's
+  arrival time nor the trip duration is shown. Straight-line distance cannot produce
+  a defensible pickup ETA — a driver 600 m away may be on the wrong side of a one-way
+  or a flyover, which is four minutes rather than one — and **an ETA that is wrong is
+  worse than no ETA**, because it is a promise the platform then breaks. Doing it
+  properly needs a routing provider for real road distance and duration, plus
+  estimated-versus-actual tracking to know whether the number can be trusted at all.
+  That is a project, not a field.
+
+  Two things are already in place for whenever it is built. The driver's distance to
+  the pickup is *computed today* — `GEOSEARCH` returns it and `DriverCandidate`
+  carries it — but it is used for ranking and then discarded rather than surfaced.
+  And `assigned_at` / `started_at` / `completed_at` already record the actual
+  durations, so the measurement side is ready before the estimation side exists.
+
+  The same missing input limits pricing: fares are built on straight-line distance
+  and are therefore systematically low. A routing provider would fix the fare and
+  supply the ETA in one call, which is why this belongs behind a `DistanceProvider`
+  seam at `RideBookingService.validateTrip` — the single place a distance is
+  produced — rather than being sprinkled through the pricing engine. Turning on a
+  road-distance correction would be a **pricing** change, not a technical one:
+  a 1.3 factor raises every fare by 30 %, so it has to ship alongside re-tuned tier
+  rates or a deliberate decision to charge more.
+* **No live tracking endpoint** — a rider cannot watch the assigned driver approach.
+* **No demand-based surge computation.** The surge multiplier is stored per pricing
+  rule and gated by `surge.enabled`; nothing adjusts it from live demand or supply.
+  It is an administrative lever, not an algorithm.
+* **Only one matching strategy is implemented.** The seam is complete — a
+  `DriverMatchingStrategy` bean is selected by the `matching.strategy` config row
+  and an unknown value degrades to `NEAREST` — but `NEAREST` is the only
+  implementation. `HIGHEST_RATED` would be a new `@Component` and nothing else.
+* **No driver earnings or payments.** `rides.total_fare` is what the rider pays;
+  there is no commission split, payout, settlement or ledger, and no decision
+  recorded about who funds a coupon discount. A `SUM(total_fare)` per driver
+  answers "what did riders pay", not "what do we owe".
+* **`ride.cancellation.allowed.statuses` is dead configuration.** The constant
+  exists in `ConfigKeys` and the row is seeded, but nothing reads it —
+  `RideStateMachine` is the single source of truth for legal transitions. It should
+  be deleted rather than wired, to avoid two definitions of the same rule.
+* **Client-supplied `X-Forwarded-For` is trusted.** `RequestIdFilter` takes the
+  first value blindly, so the IP-keyed login rate limit can be bypassed by
+  rotating the header. Fix is to trust the header only from known proxies.
+* **Verified end to end on MySQL 9.7 + Redis 7** (Homebrew, not Docker): all 16
   migrations apply, login/booking/start/complete/cancel, car-type upgrade,
-  idempotent replay, rate limiting (429 + `Retry-After`), audit trail and Redis
-  GEO matching all behave as documented. Not yet exercised on MySQL 8.0 itself,
-  nor under real concurrent load.
+  cancellation fee, idempotent replay, rate limiting (429 + `Retry-After`), audit
+  trail and Redis GEO matching all behave as documented. Not yet exercised on
+  MySQL 8.0 itself, nor under real concurrent load.
+
+---
+
+## 17. Assumptions
+
+Everywhere the brief was silent, this is what was decided and why.
+
+| Area | Assumption |
+|---|---|
+| Distance | Straight-line haversine, not road distance. Fares are therefore lower than a real trip. Swapping in a routing provider changes one call in `RideBookingService.validateTrip`, not the pricing engine. |
+| Pricing tiers | Slab, not flat-rate: a 6 km trip bills 2 km, 3 km and 1 km at the three tier rates. Each tier line is rounded on its own so the printed breakdown sums exactly to the distance fare. |
+| Rounding | Every monetary amount is `HALF_UP` at scale 2, in `Money` and nowhere else. Distance is scale 3. |
+| Car-type billing | An upgraded rider is billed at the multiplier of the type they **requested**, not the one they got. |
+| Zone selection | The **pickup** decides the pricing zone; the drop is never considered, so the fare cannot change under the rider mid-ride. `quote()` is not even given the drop coordinates. |
+| Overlapping zones | Resolved by `priority DESC, radius ASC`, first match wins. Equal priority *and* equal radius overlapping the same point is genuinely ambiguous and is not validated against. |
+| Coupon timing | Applied at **booking**, not at `start`. The fare snapshot is frozen when the ride is created, so the discount has to be computed then. |
+| Coupon eligibility | Tested against the fare **after** surge and **after** the minimum-fare floor. Enabling surge can therefore make a previously-rejected coupon valid. |
+| Coupon deletion | `DELETE /coupons/{id}` deactivates rather than hard-deletes; redemption history must survive. |
+| Coupon on cancellation | The redemption is reversed, so the rider keeps the use they never got a ride for. |
+| Driver acceptance | There is none. Booking claims a driver directly; a driver can only cancel afterwards. A real offer/accept flow needs a new state between `REQUESTED` and `DRIVER_ASSIGNED` plus a timeout worker. |
+| Driver position | Owned by the device and stored only in Redis. A GPS ping never writes to MySQL, because the `drivers` row is also the reservation row and per-ping writes would both create a hot spot and churn the `version` the booking compares against. |
+| Stale positions | A driver with no fresh position is not dispatched, even though MySQL still says `AVAILABLE`. Losing pings is acceptable: a position is a re-sent sample, not a fact. |
+| Cancellation fee | See section 12 — flat, rider-only, grace-windowed, stored on the ride. |
+| Storage | MySQL is used even though the brief allows in-memory, because the concurrency guarantee is a conditional `UPDATE`, which needs a real database to be meaningful. |
+| Ride history | Returns every status, so "ongoing and completed" is satisfied without a filter parameter. |
+
+---
+
+## 18. What I would do differently with more time
+
+In the order I would actually do them.
+
+1. **Automated tests.** The largest gap, and the pricing engine is the natural
+   place to start: it is a pure function of its inputs, so tiers, the minimum-fare
+   floor, car-type multipliers, percentage caps, flat coupons and the free upgrade
+   can all be covered without a database. `CancellationFeePolicy` and
+   `RideStateMachine` are equally pure. The concurrency guarantee needs a real
+   MySQL, so that one belongs in a Testcontainers integration test that fires two
+   concurrent bookings at one driver and asserts exactly one wins.
+2. **A complete analytics dataset.** This is the one I would push hardest for, and
+   it is a product decision more than a technical one: a business cannot scale or
+   make decisions without data, and nobody signs off on a change they cannot measure.
+   Today the platform records what *happened* to each ride, but nothing that answers
+   *why the business is performing the way it is*.
+
+   Two things already work in its favour. Every ride carries an immutable pricing
+   snapshot — `pricing_rule_code`, `pricing_zone_code` and the full `fare_breakdown`
+   JSON — so historical analysis stays correct even after rules, zones or surge are
+   changed. And `audit_logs` is already event-shaped, which makes it a usable source
+   for a change-data-capture pipeline rather than something to bolt on later.
+
+   What is missing is the measurement layer:
+
+   * **A funnel, with reasons.** requested → matched → started → completed, against
+     cancelled. Right now a `NO_DRIVER_IN_RADIUS` is an error response and nothing
+     else; it should be a recorded demand signal, because unmet demand is the single
+     most valuable number a marketplace has.
+   * **Supply and demand per zone per time bucket.** Requests, available drivers,
+     match rate and median pickup distance. This is the same input demand-based
+     surge needs, so the analytics work and item 5 are really one project — build the
+     measurement first, and surge becomes a consumer of it rather than a guess.
+   * **Matching quality.** Candidates considered per booking, how often the first
+     choice lost the reservation race, and how often a hatchback request had to be
+     upgraded — that last one is a direct read on fleet-mix shortfall.
+   * **Unit economics per ride.** Fare, discount borne, cancellation fee, and later
+     commission and driver payout, which is why this and the `ride_charges` ledger
+     in item 4 belong together.
+   * **Driver behaviour.** Utilisation, idle time, cancellation rate, ping
+     continuity.
+
+   Two design constraints I would hold to. First, **analytics must not run on the
+   OLTP tables** — an unbounded `SUM(total_fare)` over `rides` is a full scan of the
+   largest table, and the current indexes only support per-user and per-driver
+   lookups by `requested_at`. That means a read replica or warehouse plus scheduled
+   rollups, and reporting endpoints with a mandatory date range so nobody can
+   accidentally trigger a lifetime scan. Second, **pre-aggregate into fact tables**
+   rather than computing on read, for exactly the reason the fare and the
+   cancellation fee are snapshotted: a number that changes retrospectively is not a
+   number anyone can act on.
+3. **Vehicle category as data, not an enum.** Adding a car type today means a Java
+   enum change plus a migration for four `CHECK` constraints. With `bike` on any
+   roadmap, the catalogue and the substitution graph belong in tables, with the
+   `CHECK`s replaced by foreign keys — same integrity, no deploy per category.
+4. **A `ride_charges` ledger.** Cancellation fee is the first money line item that
+   is not the fare. The second one (waiting charge, toll, tip, commission, payout)
+   should arrive as a ledger rather than another column, and driver earnings fall
+   out of it.
+5. **Demand-based surge.** The multiplier is already threaded through pricing and
+   snapshotted per ride, so the missing part is only the input: a rolling count of
+   unmatched requests versus available drivers per zone — which item 2 produces.
+6. **A second matching strategy**, mostly to prove the seam in review rather than
+   because the product needs it.
+7. **Trusted-proxy handling** for `X-Forwarded-For`, and a rate limit on the two
+   public registration endpoints, which have none today.
+8. **Observability.** Structured request logging exists via the request-id filter,
+   but there are no metrics — booking success rate, match latency, candidates per
+   booking and reservation-race counts are the four I would add first. This is the
+   operational twin of item 2: metrics tell you the system is healthy, analytics
+   tells you the business is.
+
+---
+
+## 19. How AI was used
+
+> **This section is a scaffold, not a finished answer.** It records what is
+> verifiable from the session logs; the earlier phases need filling in by hand
+> before this is submitted. Anything left as `TODO` is unowned, and unowned text is
+> worse than no text.
+
+**TODO — earlier phases.** The initial domain modelling, schema design, module
+layout and the first working booking flow predate the session below. Fill in: what
+was prompted for, what came back unusable, and what was rewritten by hand.
+
+**Verifiable from the most recent session:**
+
+* **Reviewed rather than accepted.** Two real defects were found by reading the
+  code rather than by running it, and both were then reproduced deliberately: a
+  booking that lost its `Idempotency-Key` when Redis was unreachable, poisoning the
+  client's own retry for 24 hours; and the recovery snapshot only being refreshed
+  when a driver changed status, so warm-up after a Redis restart placed drivers
+  wherever they last went online rather than where they actually were.
+* **Verification was adversarial, not confirmatory.** The Redis-down behaviour was
+  tested by pointing an instance at a dead port rather than by reasoning about it.
+  The snapshot fix was proved by pinging a *different* position mid-ride and
+  asserting the stored value moved to it, which a passing happy-path test would not
+  have caught.
+* **Arithmetic was checked independently.** Fares were computed by hand from the
+  tier tables and compared against live API responses — `50.00` on a floored short
+  trip, `143.13` on a 28 km trip with a percentage coupon, `250.04` under a nested
+  airport zone, `94.60` in Delhi. All matched to the paisa.
+* **A suggested design was pushed back on and changed.** Setting the driver's
+  position from the ride's drop coordinates on completion was rejected as
+  fabricating a GPS fix; the implementation copies the driver's real last reported
+  position instead, and does nothing when there is none.
+* **What was deliberately not built.** A demand-based surge engine, a driver
+  accept/reject flow, and an earnings ledger were all scoped and then declined as
+  out of scope rather than half-built. Section 16 lists them as gaps instead.
+
+---

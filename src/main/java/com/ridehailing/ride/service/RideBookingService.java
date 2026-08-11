@@ -36,7 +36,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 /**
  * Orchestrates booking. Deliberately NOT transactional: the Redis search and
@@ -72,19 +71,25 @@ public class RideBookingService {
                 return replay;
             }
         }
+        try {
+            return bookUnderLock(userId, request, idempotencyKey, idempotent);
+        } catch (RuntimeException ex) {
+            if (idempotent) {
+                idempotencyService.abort(userId, idempotencyKey);
+            }
+            throw ex;
+        }
+    }
 
+    private RideResponse bookUnderLock(Long userId, CreateRideRequest request,
+                                       String idempotencyKey, boolean idempotent) {
         // Coordination only. Correctness comes from the conditional UPDATE in
         // MySQL, never from this lock.
         String lockKey = RedisKeys.bookingLock(userId);
         Duration lockTtl = Duration.ofSeconds(configurationService.getInt(ConfigKeys.BOOKING_LOCK_TTL_SECONDS, 10));
-        Optional<String> lockToken = distributedLockService.acquire(lockKey, lockTtl);
-        if (lockToken.isEmpty()) {
-            if (idempotent) {
-                idempotencyService.abort(userId, idempotencyKey);
-            }
-            throw new BusinessException(ErrorCode.REQUEST_ALREADY_IN_PROGRESS,
-                    "Another booking for this rider is still being processed");
-        }
+        String lockToken = distributedLockService.acquire(lockKey, lockTtl)
+                .orElseThrow(() -> new BusinessException(ErrorCode.REQUEST_ALREADY_IN_PROGRESS,
+                        "Another booking for this rider is still being processed"));
 
         try {
             RideResponse response = doBook(userId, request);
@@ -92,13 +97,8 @@ public class RideBookingService {
                 idempotencyService.complete(userId, idempotencyKey, response.id(), response);
             }
             return response;
-        } catch (RuntimeException ex) {
-            if (idempotent) {
-                idempotencyService.abort(userId, idempotencyKey);
-            }
-            throw ex;
         } finally {
-            distributedLockService.release(lockKey, lockToken.get());
+            distributedLockService.release(lockKey, lockToken);
         }
     }
 
