@@ -9,7 +9,8 @@ spring:
     name: ridehailing
 
   datasource:
-    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:ridehailing}?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8&rewriteBatchedStatements=true
+    # DB_URL overrides wholesale: a hosted MySQL needs its own SSL and pooling parameters.
+    url: ${DB_URL:jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:ridehailing}?useSSL=${DB_USE_SSL:false}&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8&rewriteBatchedStatements=true}
     username: ${DB_USERNAME:root}
     password: ${DB_PASSWORD:root}
     hikari:
@@ -48,7 +49,11 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      # Managed Valkey/Redis authenticates a named user over TLS; both are off locally.
+      username: ${REDIS_USERNAME:}
       password: ${REDIS_PASSWORD:}
+      ssl:
+        enabled: ${REDIS_SSL:false}
       timeout: 2s
       lettuce:
         pool:
@@ -63,6 +68,9 @@ spring:
       write-dates-as-timestamps: false
 
 app:
+  # Comma separated origins for a browser app served from another host; empty permits none.
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:}
   jwt:
     # Technical configuration - NEVER stored in the database.
     secret: ${JWT_SECRET:dev-only-secret-change-me-please-0123456789abcdef}
