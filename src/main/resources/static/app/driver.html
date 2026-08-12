@@ -174,10 +174,32 @@
       '<span class="k">licence</span><span class="mono">' + esc(d.licenseNumber) + '</span>' +
       '<span class="k">rating</span><span>' + fmt(d.rating) + '</span>' +
       '<span class="k">total rides</span><span>' + d.totalRides + '</span>' +
-      '<span class="k">phone</span><span class="mono">' + esc(d.phone) + '</span>';
+      '<span class="k">phone</span><span class="mono">' + esc(d.phone) + '</span>' +
+      '<span class="k">vehicles</span><span id="myVehicles" class="muted">loading…</span>';
+    loadVehicles(d.id);
     // Status decides whether the poller may run at all, so every render re-checks it.
     syncPoll();
     return d;
+  }
+
+
+  // A driver can hold more than one vehicle, and only an active one of the right type can ever be matched.
+  async function loadVehicles(id) {
+    const box = $("myVehicles");
+    if (!box) return;
+    try {
+      const list = await RH.api("/drivers/" + id + "/vehicles");
+      box.className = "";
+      box.innerHTML = list.length
+        ? list.map(v => '<span class="pill' + (v.active ? " ok" : " bad") + '">' + esc(v.carType) + '</span> '
+            + '<span class="mono">' + esc(v.registrationNumber) + '</span> '
+            + esc([v.make, v.model, v.color].filter(Boolean).join(" "))
+            + (v.active ? "" : ' <span class="muted">(inactive — never matched)</span>')).join("<br>")
+        : '<span class="muted">none registered — this driver can never be matched</span>';
+    } catch (e) {
+      box.className = "muted";
+      box.textContent = "could not load (" + e.code + ")";
+    }
   }
 
   const loadProfile = () => RH.api("/drivers/" + driverId()).then(renderProfile);

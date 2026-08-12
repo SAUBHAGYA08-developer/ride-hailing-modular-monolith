@@ -48,8 +48,9 @@
 
   <div class="card">
     <h2>Demo accounts</h2>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">Substitution never crosses a category: a hatchback request may be upgraded to a sedan, but an auto or bike is only ever served by its own type. Book the type a driver who is online actually drives.</div>
     <div class="scroll"><table>
-      <thead><tr><th>Role</th><th>Email</th><th>Password</th><th></th></tr></thead>
+      <thead><tr><th>Role</th><th>Name</th><th>Email</th><th>Password</th><th>Vehicle</th><th></th></tr></thead>
       <tbody id="demoRows"></tbody>
     </table></div>
   </div>
@@ -63,10 +64,16 @@
 <script src="shared.js"></script>
 <script>
 const DEMO = [
-  { role: "USER",   email: "rahul@ridehailing.com",       password: "User@123" },
-  { role: "DRIVER", email: "raj.kumar@ridehailing.com",   password: "Driver@123" },
-  { role: "DRIVER", email: "suresh.babu@ridehailing.com", password: "Driver@123" },
-  { role: "ADMIN",  email: "admin@ridehailing.com",       password: "Admin@123" },
+  { role: "ADMIN",  name: "Platform Admin", email: "admin@ridehailing.com",        password: "Admin@123" },
+  { role: "USER",   name: "Rahul Mehta",    email: "rahul@ridehailing.com",        password: "User@123" },
+  { role: "USER",   name: "Priya Nair",     email: "priya@ridehailing.com",        password: "User@123" },
+  { role: "USER",   name: "Amit Joshi",     email: "amit@ridehailing.com",         password: "User@123" },
+  { role: "DRIVER", name: "Raj Kumar",      email: "raj.kumar@ridehailing.com",    password: "Driver@123", carType: "SEDAN",     reg: "KA01AB1234" },
+  { role: "DRIVER", name: "Amit Sharma",    email: "amit.sharma@ridehailing.com",  password: "Driver@123", carType: "HATCHBACK", reg: "KA01CD5678" },
+  { role: "DRIVER", name: "Vikram Singh",   email: "vikram.singh@ridehailing.com", password: "Driver@123", carType: "SEDAN",     reg: "KA01EF9012" },
+  { role: "DRIVER", name: "Neha Verma",     email: "neha.verma@ridehailing.com",   password: "Driver@123", carType: "HATCHBACK", reg: "KA01GH3456" },
+  { role: "DRIVER", name: "Kiran Rao",      email: "kiran.rao@ridehailing.com",    password: "Driver@123", carType: "AUTO",      reg: "KA01IJ7890" },
+  { role: "DRIVER", name: "Suresh Babu",    email: "suresh.babu@ridehailing.com",  password: "Driver@123", carType: "BIKE",      reg: "KA01KL1234" },
 ];
 
 RH.mountChrome("Sign in");
@@ -83,8 +90,11 @@ if (RH.token() && RH.role()) {
 }
 
 RH.$("demoRows").innerHTML = DEMO.map((d, i) =>
-  `<tr><td><span class="pill">${d.role}</span></td><td class="mono">${RH.esc(d.email)}</td>
+  `<tr><td><span class="pill">${d.role}</span></td>
+   <td>${RH.esc(d.name)}</td>
+   <td class="mono">${RH.esc(d.email)}</td>
    <td class="mono">${RH.esc(d.password)}</td>
+   <td>${d.carType ? `<span class="pill">${RH.esc(d.carType)}</span> <span class="mono muted">${RH.esc(d.reg)}</span>` : '<span class="muted">&mdash;</span>'}</td>
    <td><button class="sm" data-use="${i}">Use</button></td></tr>`).join("");
 
 document.querySelectorAll("[data-use]").forEach(b => b.onclick = () => {
