@@ -342,17 +342,27 @@ if (RH.requireRole("USER")) {
 
   RH.$("btnNewKey").onclick = () => { RH.$("idemKey").value = newKey(); RH.banner("tripBanner", "New idempotency key generated.", "info"); };
 
+  // The key that was actually sent, so Replay can reuse it after Book has rolled the field forward.
+  let lastUsedKey = null;
+
   RH.$("btnBook").onclick = () => guard(async () => {
     try {
-      const r = await doBook(str("idemKey") || newKey());
-      RH.banner("tripBanner", "Booked ride #" + r.id + " — driver " + (r.driver ? r.driver.fullName : "pending") + ".", "ok");
+      const key = str("idemKey") || newKey();
+      const r = await doBook(key);
+      lastUsedKey = key;
+      // A used key belongs to that ride for a day, so leaving it in the field would replay it on the next booking.
+      RH.$("idemKey").value = newKey();
+      RH.banner("tripBanner", "Booked ride #" + r.id + " — driver " + (r.driver ? r.driver.fullName : "pending")
+        + ". A fresh key is ready; press Replay to re-send the one this ride was booked with.", "ok");
     } catch (e) { RH.banner("tripBanner", e.message + hint(e)); }
   });
 
   RH.$("btnReplay").onclick = () => guard(async () => {
+    if (!lastUsedKey) return RH.banner("tripBanner", "Book a ride first — there is no key to replay yet.", "info");
     try {
-      const r = await doBook(str("idemKey"));
-      RH.banner("tripBanner", "Replayed the same key and got ride #" + r.id + " back — no second ride was created.", "ok");
+      const r = await doBook(lastUsedKey);
+      RH.banner("tripBanner", "Replayed key " + lastUsedKey + " and got ride #" + r.id
+        + " back — no second ride was created.", "ok");
     } catch (e) { RH.banner("tripBanner", e.message + hint(e)); }
   });
 
