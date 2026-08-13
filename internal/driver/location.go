@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strconv"
 	"time"
@@ -48,26 +49,16 @@ func (s *Service) FindNearby(ctx context.Context, latitude, longitude float64, r
 		return []NearbyDriver{}, nil
 	}
 
-	hits, err := s.rdb.GeoSearchLocation(ctx, store.DriverGeoSet, &redis.GeoSearchLocationQuery{
-		GeoSearchQuery: redis.GeoSearchQuery{
-			Longitude:  longitude,
-			Latitude:   latitude,
-			Radius:     radiusKm,
-			RadiusUnit: "km",
-			Sort:       "ASC",
-			Count:      limit,
-		},
-		WithDist: true,
-	}).Result()
+	hits, err := s.geoSearch(ctx, latitude, longitude, radiusKm, limit)
 	if err != nil {
 		return nil, err
 	}
 
 	nearby := make([]NearbyDriver, 0, len(hits))
 	for _, hit := range hits {
-		driverID, ok := parseMember(hit.Name)
+		driverID, ok := parseMember(hit.member)
 		if !ok {
-			s.evict(ctx, hit.Name)
+			s.evict(ctx, hit.member)
 			continue
 		}
 		exists, err := s.rdb.Exists(ctx, store.DriverFreshnessKey(driverID)).Result()
@@ -76,12 +67,63 @@ func (s *Service) FindNearby(ctx context.Context, latitude, longitude float64, r
 		}
 		if exists == 0 {
 			// The driver stopped reporting, so the position is no longer trustworthy: drop it.
-			s.evict(ctx, hit.Name)
+			s.evict(ctx, hit.member)
 			continue
 		}
-		nearby = append(nearby, NearbyDriver{DriverID: driverID, DistanceKm: hit.Dist})
+		nearby = append(nearby, NearbyDriver{DriverID: driverID, DistanceKm: hit.distanceKm})
 	}
 	return nearby, nil
+}
+
+type geoHit struct {
+	member     string
+	distanceKm float64
+}
+
+// Issued by hand: go-redis 9.22 appends the GEOSEARCH options twice, and one Redis command per call is the point here.
+func (s *Service) geoSearch(ctx context.Context, latitude, longitude, radiusKm float64, limit int) ([]geoHit, error) {
+	reply, err := s.rdb.Do(ctx, "GEOSEARCH", store.DriverGeoSet,
+		"FROMLONLAT", longitude, latitude,
+		"BYRADIUS", radiusKm, "km",
+		"ASC", "COUNT", limit, "WITHDIST").Slice()
+	if errors.Is(err, redis.Nil) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	hits := make([]geoHit, 0, len(reply))
+	for _, entry := range reply {
+		fields, ok := entry.([]any)
+		if !ok || len(fields) < 2 {
+			continue
+		}
+		name, ok := fields[0].(string)
+		if !ok {
+			continue
+		}
+		// RESP3 answers the distance as a double, RESP2 as a bulk string.
+		hits = append(hits, geoHit{member: name, distanceKm: asFloat(fields[1])})
+	}
+	return hits, nil
+}
+
+func asFloat(value any) float64 {
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case int64:
+		return float64(typed)
+	case string:
+		parsed, err := strconv.ParseFloat(typed, 64)
+		if err != nil {
+			return 0
+		}
+		return parsed
+	default:
+		return 0
+	}
 }
 
 // Every driver reporting a fresh position. Operator view only: it walks the whole GEO set.

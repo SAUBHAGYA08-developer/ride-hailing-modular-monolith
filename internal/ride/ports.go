@@ -88,10 +88,10 @@ type BookingLock interface {
 
 // Canonical names of the configuration rows this module reads.
 const (
-	ConfigSearchRadiusKm            = "ride.search.radius.km"
-	ConfigCancellationFeeAmount     = "ride.cancellation.fee.amount"
-	ConfigCancellationGraceSeconds  = "ride.cancellation.fee.grace.seconds"
-	ConfigBookingLockTTLSeconds     = "ride.booking.lock.ttl.seconds"
-	ConfigPickupAverageSpeedKmph    = "ride.pickup.average.speed.kmph"
-	ConfigCancellationFeeMethod     = "payment.cancellation.fee.method"
+	ConfigSearchRadiusKm           = "ride.search.radius.km"
+	ConfigCancellationFeeAmount    = "ride.cancellation.fee.amount"
+	ConfigCancellationGraceSeconds = "ride.cancellation.fee.grace.seconds"
+	ConfigBookingLockTTLSeconds    = "ride.booking.lock.ttl.seconds"
+	ConfigPickupAverageSpeedKmph   = "ride.pickup.average.speed.kmph"
+	ConfigCancellationFeeMethod    = "payment.cancellation.fee.method"
 )

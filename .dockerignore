@@ -1,8 +1,6 @@
-target/
 .git/
 .github/
 .idea/
-*.iml
 docker/
 docker-compose.yml
 scripts/
