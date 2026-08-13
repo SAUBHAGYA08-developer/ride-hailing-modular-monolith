@@ -78,7 +78,7 @@ func main() {
 	user.NewHandler(userSvc).Routes(mux)
 	driver.NewHandler(driverSvc).Routes(mux)
 	pricing.NewHandler(pricingSvc).Routes(mux)
-	ride.NewHandler(booking, lifecycle, query).Routes(mux)
+	ride.NewHandler(booking, lifecycle, query, ride.NewIdempotency(db, cfgPort)).Routes(mux)
 	payment.NewHandler(paymentSvc, query).Routes(mux)
 
 	mux.HandleFunc("GET /actuator/health", func(w http.ResponseWriter, r *http.Request) {

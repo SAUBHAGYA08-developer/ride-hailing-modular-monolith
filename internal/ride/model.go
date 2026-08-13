@@ -119,6 +119,17 @@ func (n Num) MarshalJSON() ([]byte, error) {
 	return []byte(decimal.Decimal(n).String()), nil
 }
 
+// Needed because MarshalJSON writes a bare number: without this, a stored response cannot be read back
+// and an idempotent replay fails.
+func (n *Num) UnmarshalJSON(raw []byte) error {
+	var value decimal.Decimal
+	if err := value.UnmarshalJSON(raw); err != nil {
+		return err
+	}
+	*n = Num(value)
+	return nil
+}
+
 func (n Num) Decimal() decimal.Decimal { return decimal.Decimal(n) }
 
 func num(value decimal.Decimal) Num { return Num(value) }

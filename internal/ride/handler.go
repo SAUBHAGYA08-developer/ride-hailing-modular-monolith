@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"ridehailing/internal/auth"
 	"ridehailing/internal/httpx"
@@ -17,13 +18,15 @@ const maxPageSize = 100
 const defaultPageSize = 20
 
 type Handler struct {
-	booking   *BookingService
-	lifecycle *LifecycleService
-	query     *QueryService
+	booking     *BookingService
+	lifecycle   *LifecycleService
+	query       *QueryService
+	idempotency *Idempotency
 }
 
-func NewHandler(booking *BookingService, lifecycle *LifecycleService, query *QueryService) *Handler {
-	return &Handler{booking: booking, lifecycle: lifecycle, query: query}
+func NewHandler(booking *BookingService, lifecycle *LifecycleService, query *QueryService,
+	idempotency *Idempotency) *Handler {
+	return &Handler{booking: booking, lifecycle: lifecycle, query: query, idempotency: idempotency}
 }
 
 func (h *Handler) Routes(mux *http.ServeMux) {
@@ -44,11 +47,39 @@ func (h *Handler) book(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, r, err)
 		return
 	}
-	booked, err := h.booking.Book(contextOf(r, principal), principal.UserID, request)
+	ctx := contextOf(r, principal)
+	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+
+	// Without a key the caller has opted out of duplicate suppression, so booking runs unguarded.
+	if key == "" || h.idempotency == nil {
+		booked, err := h.booking.Book(ctx, principal.UserID, request)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.Created(w, r, booked)
+		return
+	}
+
+	hash := h.idempotency.Hash(request)
+	replay, err := h.idempotency.Begin(ctx, principal.UserID, key, hash)
 	if err != nil {
 		httpx.Fail(w, r, err)
 		return
 	}
+	if replay != nil {
+		httpx.Created(w, r, *replay)
+		return
+	}
+
+	booked, err := h.booking.Book(ctx, principal.UserID, request)
+	if err != nil {
+		// Releasing the key lets the client retry; a booking that never happened must not be replayable.
+		h.idempotency.Abort(ctx, principal.UserID, key)
+		httpx.Fail(w, r, err)
+		return
+	}
+	h.idempotency.Complete(ctx, principal.UserID, key, booked.ID, booked)
 	httpx.Created(w, r, booked)
 }
 
