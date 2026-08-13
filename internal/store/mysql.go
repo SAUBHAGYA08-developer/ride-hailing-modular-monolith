@@ -14,7 +14,10 @@ func OpenMySQL(dsn string, poolSize int) (*sql.DB, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(poolSize)
+	// Idle equals open so a warm connection is always ready: re-handshaking TLS to a managed MySQL costs more
+	// than holding the socket, and an idle Go connection costs almost nothing.
 	db.SetMaxIdleConns(poolSize)
+	db.SetConnMaxIdleTime(0)
 	db.SetConnMaxLifetime(30 * time.Minute)
 	if err := db.Ping(); err != nil {
 		return nil, err

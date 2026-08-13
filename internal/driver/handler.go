@@ -22,6 +22,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/drivers/fleet", httpx.RequirePermission("DRIVER_FLEET_READ", h.fleet))
 	mux.HandleFunc("GET /api/v1/drivers/{driverId}", httpx.RequirePermission("DRIVER_READ", h.getByID))
 	mux.HandleFunc("PUT /api/v1/drivers/{driverId}/location", httpx.RequirePermission("DRIVER_LOCATION_UPDATE", h.updateLocation))
+	mux.HandleFunc("GET /api/v1/drivers/{driverId}/vehicles", httpx.RequirePermission("VEHICLE_READ", h.vehicles))
 	mux.HandleFunc("PUT /api/v1/drivers/{driverId}/status", httpx.RequirePermission("DRIVER_STATUS_UPDATE", h.updateStatus))
 }
 

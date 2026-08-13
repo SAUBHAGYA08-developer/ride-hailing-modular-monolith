@@ -26,7 +26,7 @@ func Load() Config {
 	return Config{
 		Port:       env("PORT", env("SERVER_PORT", "8090")),
 		DSN:        dsn(),
-		DBPoolSize: envInt("DB_POOL_SIZE", 5),
+		DBPoolSize: envInt("DB_POOL_SIZE", 100),
 		RedisAddr:  redisAddr(),
 		RedisUser:  redisPart("user"),
 		RedisPass:  redisPart("pass"),

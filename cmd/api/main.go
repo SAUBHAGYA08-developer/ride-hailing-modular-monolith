@@ -74,8 +74,6 @@ func main() {
 	lifecycle := ride.NewLifecycleService(db, fleet, cfgPort, paymentSvc, audit)
 	query := ride.NewQueryService(db, cfgPort, paymentSvc)
 
-	limiter := httpx.NewLimiter(rdb, intConfigAdapter{configReader})
-
 	mux := http.NewServeMux()
 	user.NewHandler(userSvc).Routes(mux)
 	driver.NewHandler(driverSvc).Routes(mux)
@@ -90,7 +88,13 @@ func main() {
 	// The same pages the Java service serves, so a browser cannot tell the two apart.
 	mux.Handle("GET /app/", http.StripPrefix("/app/", http.FileServer(http.Dir("web"))))
 
-	handler := httpx.Recover(httpx.AccessLog(httpx.WithRequestID(httpx.WithOptionalAuth(jwtService)(mux))))
+	// Go's mux answers an unmatched route in plain text; the pages parse JSON, so an unknown path must be an envelope too.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		httpx.Fail(w, r, httpx.Err("NOT_FOUND", http.StatusNotFound, "No handler for "+r.URL.Path))
+	})
+
+	// WithRequestID must wrap AccessLog, not the other way round, or the log line is written before the id exists.
+	handler := httpx.Recover(httpx.WithRequestID(httpx.AccessLog(httpx.WithOptionalAuth(jwtService)(mux))))
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
@@ -114,8 +118,6 @@ func main() {
 	_ = server.Shutdown(shutdownCtx)
 	slog.Info("stopped")
 
-	// Referenced so the limiter stays wired even while individual routes own their own policies.
-	_ = limiter
 }
 
 func paymentStrategies(cfg payment.ConfigReader) []payment.Strategy {

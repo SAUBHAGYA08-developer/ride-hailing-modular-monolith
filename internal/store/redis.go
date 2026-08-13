@@ -25,7 +25,8 @@ func OpenRedis(addr, user, pass string, useTLS bool) (*redis.Client, error) {
 		DialTimeout:  10 * time.Second,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
-		PoolSize:     4,
+		PoolSize:     50,
+		MinIdleConns: 5,
 	}
 	if useTLS {
 		opts.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
