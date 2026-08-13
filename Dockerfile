@@ -1,5 +1,5 @@
 # Static binary, so the runtime image needs no Go toolchain and no libc.
-FROM golang:1.24-alpine AS build
+FROM golang:1.25-alpine AS build
 WORKDIR /src
 
 # Dependencies resolve in their own layer, so a source-only change does not re-download them.
