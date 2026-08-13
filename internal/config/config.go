@@ -25,25 +25,93 @@ func Load() Config {
 		Port:       env("PORT", env("SERVER_PORT", "8090")),
 		DSN:        dsn(),
 		DBPoolSize: envInt("DB_POOL_SIZE", 5),
-		RedisAddr:  env("REDIS_HOST", "localhost") + ":" + env("REDIS_PORT", "6379"),
-		RedisUser:  env("REDIS_USERNAME", ""),
-		RedisPass:  env("REDIS_PASSWORD", ""),
-		RedisTLS:   env("REDIS_SSL", "false") == "true",
+		RedisAddr:  redisAddr(),
+		RedisUser:  redisPart("user"),
+		RedisPass:  redisPart("pass"),
+		RedisTLS:   redisTLS(),
 		JWTSecret:  env("JWT_SECRET", "dev-only-secret-change-me-please-0123456789abcdef"),
 		JWTIssuer:  env("JWT_ISSUER", "ridehailing"),
 		JWTExpiry:  envInt("JWT_EXPIRATION_SECONDS", 3600),
 	}
 }
 
-// Go's driver wants user:pass@tcp(host:port)/db, not a JDBC URL, so it is assembled from parts.
+// Go's driver wants user:pass@tcp(host:port)/db, so a JDBC DB_URL is translated rather than ignored.
 func dsn() string {
+	host, port, name, tls := env("DB_HOST", "localhost"), env("DB_PORT", "3306"),
+		env("DB_NAME", "ridehailing"), env("DB_USE_SSL", "false") == "true"
+
+	// DB_URL wins when present, so one deployment config can drive this service and the Java one.
+	if raw := env("DB_URL", ""); raw != "" {
+		trimmed := strings.TrimPrefix(strings.TrimPrefix(raw, "jdbc:"), "mysql://")
+		if parsed, err := url.Parse("mysql://" + trimmed); err == nil && parsed.Host != "" {
+			if h, p, err := net.SplitHostPort(parsed.Host); err == nil {
+				host, port = h, p
+			} else {
+				host = parsed.Host
+			}
+			if db := strings.TrimPrefix(parsed.Path, "/"); db != "" {
+				name = db
+			}
+			// Both spellings appear in the wild; either one means the server demands TLS.
+			mode := parsed.Query().Get("sslMode") + parsed.Query().Get("ssl-mode")
+			tls = strings.EqualFold(mode, "REQUIRED") || parsed.Query().Get("useSSL") == "true"
+		}
+	}
+
 	params := "?parseTime=true&loc=UTC&charset=utf8mb4"
-	if env("DB_USE_SSL", "false") == "true" {
+	if tls {
 		params += "&tls=true"
 	}
 	return env("DB_USERNAME", "root") + ":" + env("DB_PASSWORD", "root") +
-		"@tcp(" + env("DB_HOST", "localhost") + ":" + env("DB_PORT", "3306") + ")/" +
-		env("DB_NAME", "ridehailing") + params
+		"@tcp(" + host + ":" + port + ")/" + name + params
+}
+
+// A rediss:// URL carries host, port, user, password and TLS in one value; the fields below are the fallback.
+func redisURL() *url.URL {
+	raw := env("REDIS_URL", "")
+	if raw == "" {
+		return nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		return nil
+	}
+	return parsed
+}
+
+func redisAddr() string {
+	if u := redisURL(); u != nil {
+		if _, _, err := net.SplitHostPort(u.Host); err == nil {
+			return u.Host
+		}
+		if u.Scheme == "rediss" {
+			return u.Host + ":6380"
+		}
+		return u.Host + ":6379"
+	}
+	return env("REDIS_HOST", "localhost") + ":" + env("REDIS_PORT", "6379")
+}
+
+func redisPart(which string) string {
+	if u := redisURL(); u != nil && u.User != nil {
+		if which == "user" {
+			return u.User.Username()
+		}
+		pass, _ := u.User.Password()
+		return pass
+	}
+	if which == "user" {
+		return env("REDIS_USERNAME", "")
+	}
+	return env("REDIS_PASSWORD", "")
+}
+
+// The extra s in rediss:// is the whole TLS signal, exactly as the provider prints it.
+func redisTLS() bool {
+	if u := redisURL(); u != nil {
+		return u.Scheme == "rediss"
+	}
+	return env("REDIS_SSL", "false") == "true"
 }
 
 func env(key, fallback string) string {
