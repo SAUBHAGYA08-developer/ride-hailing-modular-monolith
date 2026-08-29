@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RideHailing · Sign in</title>
+<link rel="stylesheet" href="shared.css">
+</head>
+<body>
+<div id="chrome"></div>
+<div class="wrap">
+
+  <div class="card">
+    <h2>Backend</h2>
+    <div class="row">
+      <div class="field" style="flex:1; min-width:280px">
+        <label>Base URL — the API this site talks to</label>
+        <input id="baseUrl" spellcheck="false" placeholder="https://your-api.onrender.com/api/v1">
+      </div>
+      <button id="btnSaveBase">Save</button>
+      <button id="btnPing" class="sm">Ping</button>
+      <span id="pingPill" class="pill muted">unknown</span>
+    </div>
+    <div class="muted" style="font-size:12px">
+      This page is static and holds no secret. The API must list this site's origin in
+      <span class="mono">CORS_ALLOWED_ORIGINS</span>, or the browser blocks every call.
+    </div>
+    <div id="baseBanner" class="banner"></div>
+  </div>
+
+  <div class="card">
+    <h2>Sign in</h2>
+    <div id="sessionBanner" class="banner"></div>
+    <div class="row" id="sessionActions" style="display:none">
+      <button id="btnContinue" class="primary">Continue</button>
+      <button id="btnSwitch">Sign in as someone else</button>
+    </div>
+    <div class="row">
+      <div class="field" style="flex:1; min-width:220px"><label>Email</label><input id="email" autocomplete="username"></div>
+      <div class="field" style="flex:1; min-width:180px"><label>Password</label><input id="password" type="password" autocomplete="current-password"></div>
+      <button id="btnLogin" class="primary">Sign in</button>
+    </div>
+    <div class="muted" style="font-size:12px">
+      The role comes from the token, not from a choice made here — the server decides which console you get.
+    </div>
+    <div id="loginBanner" class="banner"></div>
+  </div>
+
+  <div class="card">
+    <h2>Demo accounts</h2>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">Substitution never crosses a category: a hatchback request may be upgraded to a sedan, but an auto or bike is only ever served by its own type. Book the type a driver who is online actually drives.</div>
+    <div class="scroll"><table>
+      <thead><tr><th>Role</th><th>Name</th><th>Email</th><th>Password</th><th>Vehicle</th><th></th></tr></thead>
+      <tbody id="demoRows"></tbody>
+    </table></div>
+  </div>
+
+  <div class="card">
+    <h2>Requests</h2>
+    <div id="reqLog" class="mono"></div>
+  </div>
+</div>
+
+<script src="shared.js"></script>
+<script>
+const DEMO = [
+  { role: "ADMIN",  name: "Platform Admin", email: "admin@ridehailing.com",        password: "Admin@123" },
+  { role: "USER",   name: "Rahul Mehta",    email: "rahul@ridehailing.com",        password: "User@123" },
+  { role: "USER",   name: "Priya Nair",     email: "priya@ridehailing.com",        password: "User@123" },
+  { role: "USER",   name: "Amit Joshi",     email: "amit@ridehailing.com",         password: "User@123" },
+  { role: "DRIVER", name: "Raj Kumar",      email: "raj.kumar@ridehailing.com",    password: "Driver@123", carType: "SEDAN",     reg: "KA01AB1234" },
+  { role: "DRIVER", name: "Amit Sharma",    email: "amit.sharma@ridehailing.com",  password: "Driver@123", carType: "HATCHBACK", reg: "KA01CD5678" },
+  { role: "DRIVER", name: "Vikram Singh",   email: "vikram.singh@ridehailing.com", password: "Driver@123", carType: "SEDAN",     reg: "KA01EF9012" },
+  { role: "DRIVER", name: "Neha Verma",     email: "neha.verma@ridehailing.com",   password: "Driver@123", carType: "HATCHBACK", reg: "KA01GH3456" },
+  { role: "DRIVER", name: "Kiran Rao",      email: "kiran.rao@ridehailing.com",    password: "Driver@123", carType: "AUTO",      reg: "KA01IJ7890" },
+  { role: "DRIVER", name: "Suresh Babu",    email: "suresh.babu@ridehailing.com",  password: "Driver@123", carType: "BIKE",      reg: "KA01KL1234" },
+];
+
+RH.mountChrome("Sign in");
+RH.$("baseUrl").value = RH.baseUrl();
+
+// Offer the existing session rather than redirecting into it, so a demo can switch roles here.
+if (RH.token() && RH.role()) {
+  RH.banner("sessionBanner",
+    "Already signed in as " + (RH.email() || RH.role()) + " (" + RH.role() + ").", "info");
+  RH.$("sessionActions").style.display = "flex";
+  RH.$("btnContinue").textContent = "Continue as " + RH.role();
+  RH.$("btnContinue").onclick = () => location.href = RH.homeFor(RH.role());
+  RH.$("btnSwitch").onclick = () => { RH.logout(); location.reload(); };
+}
+
+RH.$("demoRows").innerHTML = DEMO.map((d, i) =>
+  `<tr><td><span class="pill">${d.role}</span></td>
+   <td>${RH.esc(d.name)}</td>
+   <td class="mono">${RH.esc(d.email)}</td>
+   <td class="mono">${RH.esc(d.password)}</td>
+   <td>${d.carType ? `<span class="pill">${RH.esc(d.carType)}</span> <span class="mono muted">${RH.esc(d.reg)}</span>` : '<span class="muted">&mdash;</span>'}</td>
+   <td><button class="sm" data-use="${i}">Use</button></td></tr>`).join("");
+
+document.querySelectorAll("[data-use]").forEach(b => b.onclick = () => {
+  const d = DEMO[+b.dataset.use];
+  RH.$("email").value = d.email;
+  RH.$("password").value = d.password;
+});
+
+RH.$("btnSaveBase").onclick = () => {
+  RH.setBaseUrl(RH.$("baseUrl").value);
+  RH.banner("baseBanner", "Base URL saved: " + RH.baseUrl(), "ok");
+};
+
+RH.$("btnPing").onclick = async () => {
+  RH.setBaseUrl(RH.$("baseUrl").value);
+  const pill = RH.$("pingPill");
+  pill.className = "pill"; pill.textContent = "checking…";
+  try {
+    // A 401 still proves the host answered and CORS allowed it, which is what we are testing.
+    await RH.api("/pricing/zones").catch(e => { if (e.status === 401 || e.status === 403) return null; throw e; });
+    pill.className = "pill ok"; pill.textContent = "reachable";
+    RH.banner("baseBanner", "", "ok");
+  } catch (e) {
+    pill.className = "pill bad"; pill.textContent = "unreachable";
+    RH.banner("baseBanner", e.message, "err");
+  }
+};
+
+RH.$("btnLogin").onclick = async () => {
+  RH.setBaseUrl(RH.$("baseUrl").value);
+  RH.banner("loginBanner", "");
+  const email = RH.$("email").value.trim(), password = RH.$("password").value;
+  if (!email || !password) return RH.banner("loginBanner", "Email and password are required.");
+  try {
+    const data = await RH.api("/auth/login", { method: "POST", body: { email, password } });
+    const jwt = data.accessToken;
+    const role = RH.roleFromJwt(jwt);
+    if (!role) return RH.banner("loginBanner", "Signed in, but the token carries no role claim.");
+    RH.session(jwt, role, email);
+    location.href = RH.homeFor(role);
+  } catch (e) {
+    RH.banner("loginBanner", e.message);
+  }
+};
+
+RH.$("password").addEventListener("keydown", e => { if (e.key === "Enter") RH.$("btnLogin").click(); });
+</script>
+</body>
+</html>

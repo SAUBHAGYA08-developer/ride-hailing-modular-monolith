@@ -1,0 +1,1893 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ride Hailing — Demo Console</title>
+<style>
+  :root {
+    --bg: #0e1117;
+    --panel: #161b25;
+    --panel-2: #1d2330;
+    --line: #2a3242;
+    --text: #e6e9ef;
+    --muted: #8b95a7;
+    --accent: #4f8cff;
+    --ok: #2ecc71;
+    --warn: #f4b740;
+    --err: #ff5f56;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  header .spacer { flex: 1; }
+  /* min-width:0 stops a wide table (the audit log JSON column) from forcing
+     the grid column wider than the viewport instead of scrolling inside. */
+  .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; align-items: start; }
+  .layout > div { min-width: 0; }
+  @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 16px;
+  }
+  .card > h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted);
+    margin: 0 0 12px; font-weight: 600;
+  }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 10px; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  input, select, textarea {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 6px; padding: 7px 9px; font: inherit; min-width: 0;
+  }
+  input:focus, select:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+  input.narrow { width: 108px; }
+  input.tiny { width: 74px; }
+  button {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 7px 12px; font: inherit; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 500; }
+  button.primary:hover { filter: brightness(1.1); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.sm { padding: 4px 8px; font-size: 12px; }
+  .pill {
+    display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px;
+    font-weight: 600; letter-spacing: .4px; border: 1px solid var(--line); background: var(--panel-2);
+  }
+  .pill.ok { color: var(--ok); border-color: #1f5b3a; }
+  .pill.warn { color: var(--warn); border-color: #6b4d12; }
+  .pill.err { color: var(--err); border-color: #6b2320; }
+  .pill.info { color: var(--accent); border-color: #2b4a80; }
+  .pill.muted { color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); font-weight: 600; }
+  td.num, th.num { text-align: right; font-family: var(--mono); }
+  /* Audit payloads are long single-line JSON; keep them inside the cell. */
+  td.wide { max-width: 340px; overflow-wrap: anywhere; font-family: var(--mono); font-size: 11.5px; }
+  .muted { color: var(--muted); }
+  .mono { font-family: var(--mono); }
+  .session { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--panel-2); }
+  .sessions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  @media (max-width: 760px) { .sessions { grid-template-columns: 1fr; } }
+  .session h3 { margin: 0 0 8px; font-size: 12px; letter-spacing: .6px; text-transform: uppercase; color: var(--muted); }
+  .session select { width: 100%; }
+  .session .who { font-size: 12px; margin-top: 6px; min-height: 18px; }
+  .log { max-height: 460px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+  .log-item { border-bottom: 1px solid var(--line); font-size: 12px; }
+  .log-head {
+    display: grid; grid-template-columns: 68px 52px 1fr 52px 60px; gap: 8px;
+    padding: 6px 10px; cursor: pointer; align-items: center; font-family: var(--mono);
+  }
+  .log-head:hover { background: var(--panel-2); }
+  .log-body { padding: 0 10px 10px 10px; display: none; }
+  .log-item.open .log-body { display: block; }
+  pre {
+    margin: 6px 0 0; background: #0a0d13; border: 1px solid var(--line); border-radius: 6px;
+    padding: 8px 10px; overflow: auto; max-height: 260px; font-family: var(--mono); font-size: 11.5px;
+  }
+  .kv { display: grid; grid-template-columns: 150px 1fr; gap: 2px 10px; font-size: 13px; }
+  .kv .k { color: var(--muted); }
+  .banner { padding: 8px 10px; border-radius: 6px; font-size: 12.5px; margin-bottom: 10px; display: none; }
+  .banner.show { display: block; }
+  .banner.err { background: #2a1618; border: 1px solid #6b2320; color: #ffb4b0; }
+  .banner.ok { background: #12251b; border: 1px solid #1f5b3a; color: #93e6b8; }
+  svg.map { width: 100%; height: 300px; background: #0a0d13; border: 1px solid var(--line); border-radius: 8px; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted); margin-top: 8px; }
+  .legend span::before { content: "\25CF"; margin-right: 5px; font-size: 13px; }
+  .hint { font-size: 11.5px; color: var(--muted); margin: -4px 0 10px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); gap: 10px; margin: 4px 0 12px; }
+  .tile { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--panel-2); }
+  .tile .n { font-family: var(--mono); font-size: 22px; font-weight: 600; line-height: 1.15; }
+  .tile .l { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-top: 4px; }
+  /* The two tiles the fleet page exists for: bookable, and the ghost gap beside it. */
+  .tile.hero { border-color: #2b4a80; background: #131d2e; }
+  .tile.hero .n { color: var(--accent); }
+  .tile.alarm { border-color: #6b4d12; background: #251d0f; }
+  .tile.alarm .n { color: var(--warn); }
+  .tabs { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+  .tabs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .tabpane { display: none; }
+  .tabpane.active { display: block; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Ride Hailing · Demo Console</h1>
+  <div class="field">
+    <label for="baseUrl">API base URL</label>
+    <input id="baseUrl" value="" placeholder="same origin" style="width: 220px">
+  </div>
+  <button id="btnHealth">Ping backend</button>
+  <span id="healthPill" class="pill muted">unknown</span>
+  <div class="spacer"></div>
+  <span class="muted" style="font-size:12px">Dev seed data · logins come from the V14 and V21 migrations</span>
+</header>
+
+<div id="globalBanner" class="banner err" style="margin: 16px 16px 0"></div>
+
+<div class="layout">
+
+  <!-- ============================= LEFT COLUMN ============================= -->
+  <div>
+    <div class="card">
+      <h2>1 · Sessions (one JWT per role)</h2>
+      <p class="hint">Each panel below uses its own token, so a rider, a driver and the admin can act at the same time — like three real apps against one backend.</p>
+      <div class="sessions">
+        <div class="session">
+          <h3>Rider</h3>
+          <select data-acc="rider"></select>
+          <div class="row" style="margin:8px 0 0">
+            <button class="primary sm" data-login="rider">Login</button>
+            <button class="sm" data-logout="rider">Logout</button>
+          </div>
+          <div class="who muted" data-who="rider">not signed in</div>
+        </div>
+        <div class="session">
+          <h3>Driver</h3>
+          <select data-acc="driver"></select>
+          <div class="row" style="margin:8px 0 0">
+            <button class="primary sm" data-login="driver">Login</button>
+            <button class="sm" data-logout="driver">Logout</button>
+          </div>
+          <div class="who muted" data-who="driver">not signed in</div>
+        </div>
+        <div class="session">
+          <h3>Admin</h3>
+          <select data-acc="admin"></select>
+          <div class="row" style="margin:8px 0 0">
+            <button class="primary sm" data-login="admin">Login</button>
+            <button class="sm" data-logout="admin">Logout</button>
+          </div>
+          <div class="who muted" data-who="admin">not signed in</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>2 · Rider — book a ride</h2>
+      <div class="row">
+        <div class="field"><label>Pickup lat</label><input id="pickLat" class="narrow" value="12.9716"></div>
+        <div class="field"><label>Pickup lng</label><input id="pickLng" class="narrow" value="77.5946"></div>
+        <div class="field" style="flex:1"><label>Pickup address</label><input id="pickAddr" value="MG Road, Bangalore"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Drop lat</label><input id="dropLat" class="narrow" value="12.9352"></div>
+        <div class="field"><label>Drop lng</label><input id="dropLng" class="narrow" value="77.6245"></div>
+        <div class="field" style="flex:1"><label>Drop address</label><input id="dropAddr" value="Koramangala, Bangalore"></div>
+      </div>
+      <div class="row">
+        <div class="field" style="flex:1">
+          <label>Trip preset</label>
+          <select id="tripPreset"></select>
+        </div>
+        <button id="btnDriverToPickup" class="sm" title="Puts the signed-in driver ~600 m from this pickup and pings">
+          Move driver to pickup
+        </button>
+        <span class="muted" style="font-size:11.5px" id="tripDistance"></span>
+      </div>
+      <p class="hint">A short trip lands on the 50 minimum fare, which is below every coupon minimum — use the long
+        preset when you want to show a coupon actually applying.</p>
+      <div class="row">
+        <div class="field"><label>Car type</label>
+          <select id="carType">
+            <option>SEDAN</option><option>HATCHBACK</option><option>AUTO</option><option>BIKE</option>
+          </select>
+        </div>
+        <div class="field"><label>Coupon</label>
+          <select id="coupon">
+            <option value="">— none —</option>
+            <option value="WELCOME10">WELCOME10 · 10% capped 100, min 100</option>
+            <option value="FLAT50">FLAT50 · min 200</option>
+            <option value="FIRST100">FIRST100 · min 300, 1 per user</option>
+          </select>
+        </div>
+        <button id="btnEstimate">Get estimate</button>
+      </div>
+      <p class="hint">Substitution never crosses a category family: a HATCHBACK may be upgraded to a SEDAN free of
+        charge, but AUTO and BIKE are only ever served by their own category — no car is sent to an auto request and
+        no auto to a bike request.</p>
+      <p class="hint">"Get estimate" prices the real trip above and books nothing — no driver is held and no coupon
+        use is taken. It is also where you check a coupon: one that cannot apply comes back as a reason on the
+        estimate rather than as an error, so there is no fare to type in by hand.</p>
+      <div class="row">
+        <button id="btnBook" class="primary">Book ride</button>
+        <button id="btnBookReplay" title="Replays the previous booking with the same Idempotency-Key">Replay same Idempotency-Key</button>
+        <button id="btnRefreshRide">Refresh ride</button>
+        <button id="btnCancelRide">Cancel ride</button>
+        <div class="field" style="flex:1"><label>Cancel reason</label><input id="cancelReason" value="Changed my mind"></div>
+      </div>
+      <div class="row">
+        <button id="btnMyRides" class="sm">My rides (rider)</button>
+        <span class="muted mono" id="idemKeyLabel" style="font-size:11.5px"></span>
+      </div>
+      <div class="row">
+        <button id="btnRiderPayments" class="sm">Payments of this ride (rider)</button>
+        <button id="btnRiderRetry" class="sm" title="A rider may read payments but never report that money arrived">
+          Retry as rider (expect 403)
+        </button>
+      </div>
+      <p class="hint">A rider holds PAYMENT_READ but not PAYMENT_COLLECT, so the retry answers 403 — shown in the
+        banner below rather than thrown. The cancellation fee is not on the ride's <span class="mono">payment</span>
+        field; it is a separate money line and only appears in this list.</p>
+      <div id="riderBanner" class="banner err"></div>
+      <div id="estimateCard"></div>
+      <div id="rideCard"></div>
+      <div id="riderPayments"></div>
+      <div id="riderRides"></div>
+    </div>
+
+    <div class="card">
+      <h2>3 · Driver — go online, move, serve</h2>
+      <div class="row">
+        <div class="field"><label>Driver id</label><input id="driverId" class="tiny" value="1"></div>
+        <button id="btnResolveDriver" class="sm" title="Probes /drivers/{id} to find the id this token owns">Resolve id</button>
+        <div class="field"><label>Status</label>
+          <select id="driverStatus"><option>AVAILABLE</option><option>OFFLINE</option></select>
+        </div>
+        <button id="btnDriverStatus">Set status</button>
+        <button id="btnDriverProfile" class="sm">Load profile</button>
+      </div>
+      <div class="row">
+        <div class="field"><label>Lat</label><input id="drvLat" class="narrow" value="12.9750"></div>
+        <div class="field"><label>Lng</label><input id="drvLng" class="narrow" value="77.5990"></div>
+        <button id="btnPing">Send location ping</button>
+        <button id="btnAutoPing">Auto-ping: off</button>
+        <button id="btnDriverRides" class="sm">My rides (driver)</button>
+      </div>
+      <div class="row">
+        <div class="field"><label>Payment method</label>
+          <select id="payMethod">
+            <option>CASH</option><option>UPI</option><option>CARD</option>
+            <option>WALLET</option><option>NETBANKING</option>
+          </select>
+        </div>
+        <button id="btnDriverPayments" class="sm">Payments of current ride</button>
+        <button id="btnRetryPayment" class="sm">Retry payment</button>
+      </div>
+      <p class="hint">Completing a ride collects the fare, so the method is mandatory on
+        <span class="mono">POST /rides/{id}/complete</span> — every Complete button on this page sends the one selected
+        here. A declined payment is not an error: the ride still completes and the payment comes back FAILED, which is
+        what "Retry payment" then re-collects, optionally on a different instrument. To force a decline, set
+        <span class="mono">payment.simulated.failure.methods</span> to a CSV of methods in the Configurations tab of
+        section 5 (<span class="mono">NONE</span> means all succeed).</p>
+      <p class="hint">A position lives in Redis for <span class="mono">driver.location.ttl.seconds</span> (60 by default).
+        Once it expires the driver falls out of matching and bookings answer <span class="mono">NO_DRIVER_IN_RADIUS</span> —
+        keep auto-ping on while demonstrating. BUSY is never set by hand: the ride module flips it atomically when it
+        claims a driver, and clears it on complete or cancel.</p>
+      <div id="driverBanner" class="banner err"></div>
+      <div id="driverProfile"></div>
+      <div id="driverPayments"></div>
+      <div id="driverRides"></div>
+    </div>
+
+    <div class="card">
+      <h2>4 · Matching map <span class="muted" style="text-transform:none;letter-spacing:0">— seeded driver positions</span></h2>
+      <svg id="map" class="map" viewBox="0 0 600 300" preserveAspectRatio="xMidYMid meet"></svg>
+      <div class="legend">
+        <span style="color:var(--accent)">pickup</span>
+        <span style="color:var(--warn)">drop</span>
+        <span style="color:var(--ok)">driver inside radius</span>
+        <span style="color:#4a5566">driver outside radius</span>
+      </div>
+      <p class="hint" style="margin-top:8px">The letter in each marker is the category — <span class="mono">S</span>
+        sedan, <span class="mono">H</span> hatchback, <span class="mono">A</span> auto, <span class="mono">B</span>
+        bike. Being inside the radius is not enough on its own: only a driver whose category may serve the request can
+        be matched, and AUTO and BIKE serve nothing but themselves.</p>
+      <p class="hint" style="margin-top:8px">Distances are the same haversine the matcher uses. The dashed circle is
+        <span class="mono">ride.search.radius.km</span> — load the configurations in section 5 to sync its real value.</p>
+    </div>
+  </div>
+
+  <!-- ============================ RIGHT COLUMN ============================ -->
+  <div>
+    <div class="card">
+      <h2>5 · Admin</h2>
+      <div class="tabs">
+        <button class="active" data-tab="cfg">Configurations</button>
+        <button data-tab="rules">Pricing rules</button>
+        <button data-tab="zones">Pricing zones</button>
+        <button data-tab="fleet">Fleet</button>
+        <button data-tab="audit">Audit log</button>
+      </div>
+      <div id="adminBanner" class="banner err"></div>
+      <div class="tabpane active" id="tab-cfg">
+        <div class="row">
+          <button id="btnLoadCfg" class="sm">Load configurations</button>
+          <span class="muted" style="font-size:12px">reads are served from the in-app cache for
+            <span class="mono">app.cache.configuration-ttl-seconds</span></span>
+        </div>
+        <div id="cfgTable"></div>
+      </div>
+      <div class="tabpane" id="tab-rules">
+        <div class="row"><button id="btnLoadRules" class="sm">Load pricing rules</button></div>
+        <div id="rulesTable"></div>
+        <details style="margin-top:12px">
+          <summary style="cursor:pointer;font-size:12px;color:var(--muted)">New pricing rule</summary>
+          <div class="row" style="margin-top:10px">
+            <div class="field"><label>Code</label><input id="nrCode" class="narrow" placeholder="AIRPORT_PREMIUM"></div>
+            <div class="field" style="flex:1"><label>Name</label><input id="nrName" placeholder="Airport Premium Pricing"></div>
+            <div class="field"><label>Min fare</label><input id="nrMinFare" class="tiny" value="100"></div>
+            <div class="field"><label>Surge</label><input id="nrSurge" class="tiny" value="1.00"></div>
+          </div>
+          <div class="row">
+            <span class="muted" style="font-size:11.5px;width:100%">Distance tiers — the top tier's "to" stays empty (open ended)</span>
+          </div>
+          <div class="row">
+            <div class="field"><label>From</label><input id="nrT1From" class="tiny" value="0"></div>
+            <div class="field"><label>To</label><input id="nrT1To" class="tiny" value="2"></div>
+            <div class="field"><label>Rate/km</label><input id="nrT1Rate" class="tiny" value="15"></div>
+            <div class="field"><label>From</label><input id="nrT2From" class="tiny" value="2"></div>
+            <div class="field"><label>To</label><input id="nrT2To" class="tiny" value="5"></div>
+            <div class="field"><label>Rate/km</label><input id="nrT2Rate" class="tiny" value="12"></div>
+            <div class="field"><label>From</label><input id="nrT3From" class="tiny" value="5"></div>
+            <div class="field"><label>To</label><input id="nrT3To" class="tiny" placeholder="open"></div>
+            <div class="field"><label>Rate/km</label><input id="nrT3Rate" class="tiny" value="8"></div>
+          </div>
+          <div class="row">
+            <span class="muted" style="font-size:11.5px;width:100%">Every category needs a multiplier — pricing falls
+              back to ×1.00 when no row matches, which would silently charge a bike the sedan fare</span>
+          </div>
+          <div class="row">
+            <div class="field"><label>SEDAN ×</label><input id="nrSedan" class="tiny" value="1.00"></div>
+            <div class="field"><label>HATCHBACK ×</label><input id="nrHatch" class="tiny" value="0.90"></div>
+            <div class="field"><label>AUTO ×</label><input id="nrAuto" class="tiny" value="0.65"></div>
+            <div class="field"><label>BIKE ×</label><input id="nrBike" class="tiny" value="0.45"></div>
+            <button id="btnCreateRule" class="primary sm">Create rule</button>
+          </div>
+        </details>
+      </div>
+      <div class="tabpane" id="tab-zones">
+        <div class="row"><button id="btnLoadZones" class="sm">Load pricing zones</button>
+          <span class="muted" style="font-size:12px">resolution order is priority DESC, then radius ASC</span>
+        </div>
+        <div id="zonesTable"></div>
+        <details style="margin-top:12px" open>
+          <summary style="cursor:pointer;font-size:12px;color:var(--muted)">New pricing zone</summary>
+          <div class="row" style="margin-top:10px">
+            <div class="field"><label>Code</label><input id="nzCode" class="narrow" placeholder="BLR_AIRPORT"></div>
+            <div class="field" style="flex:1"><label>Name</label><input id="nzName" placeholder="Kempegowda Airport"></div>
+            <div class="field"><label>Pricing rule</label><select id="nzRule"></select></div>
+          </div>
+          <div class="row">
+            <div class="field"><label>Centre lat</label><input id="nzLat" class="narrow" value="13.1986"></div>
+            <div class="field"><label>Centre lng</label><input id="nzLng" class="narrow" value="77.7066"></div>
+            <div class="field"><label>Radius km</label><input id="nzRadius" class="tiny" value="8"></div>
+            <div class="field"><label>Priority</label><input id="nzPriority" class="tiny" value="150"></div>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px">
+              <input type="checkbox" id="nzActive" checked style="width:auto"> active
+            </label>
+            <button id="btnCreateZone" class="primary sm">Create zone</button>
+          </div>
+          <div class="row">
+            <span class="muted" style="font-size:11.5px">Centre preset:</span>
+            <select id="nzPreset" style="flex:1"></select>
+          </div>
+        </details>
+      </div>
+      <div class="tabpane" id="tab-fleet">
+        <div class="row">
+          <button id="btnLoadFleet" class="sm">Load fleet</button>
+          <div class="field"><label>Status filter</label>
+            <select id="fleetStatus">
+              <option value="">— all —</option>
+              <option>AVAILABLE</option><option>BUSY</option><option>OFFLINE</option>
+            </select>
+          </div>
+          <span class="muted" style="font-size:12px">admin only, authority
+            <span class="mono">DRIVER_FLEET_READ</span></span>
+        </div>
+        <p class="hint">Authorities are baked into the JWT at login, so an admin token minted before the
+          <span class="mono">DRIVER_FLEET_READ</span> migration ran will answer 403 here — log the admin out and back
+          in (section 1) and it works.</p>
+        <div id="fleetSummary"></div>
+        <div id="fleetTable"></div>
+        <p class="hint" style="margin-top:8px"><strong>Bookable</strong> is the only honest answer to "how many drivers
+          can take a ride right now": AVAILABLE, holding an active vehicle, and still reporting a live position in
+          Redis. AVAILABLE alone is MySQL's reservation state — a driver whose position expired past
+          <span class="mono">driver.location.ttl.seconds</span> stays AVAILABLE forever yet can never be matched. That
+          gap is <span class="mono">onDutyWithoutLiveLocation</span>, and it is the number an operator otherwise only
+          learns about from rider complaints.</p>
+      </div>
+      <div class="tabpane" id="tab-audit">
+        <div class="row">
+          <div class="field"><label>Entity type</label><input id="auditEntity" placeholder="RIDE / DRIVER / …" style="width:150px"></div>
+          <button id="btnLoadAudit" class="sm">Load audit log</button>
+        </div>
+        <div id="auditTable"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>6 · Scripted demos</h2>
+      <p class="hint">Each script signs in the roles it needs, then drives the real API — watch section 7 fill up as it runs.</p>
+      <div class="row">
+        <button id="btnRunDemo" class="primary">Full happy path</button>
+        <button id="btnRunUpgrade">Car-type upgrade</button>
+        <button id="btnRunPayments">Payments walk-through</button>
+        <button id="btnRunIdem">Idempotency</button>
+        <button id="btnRunRateLimit">Rate limit</button>
+      </div>
+      <div id="demoOut" class="mono" style="font-size:12px"></div>
+    </div>
+
+    <div class="card">
+      <h2>7 · Request log</h2>
+      <div class="row">
+        <input id="logFilter" placeholder="filter by method, path or status" style="flex:1">
+        <button id="btnClearLog" class="sm">Clear</button>
+      </div>
+      <div class="log" id="logList"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------ *
+ * Demo accounts. These are the dev seed logins documented in
+ * V14__seed_demo_users_drivers_vehicles.sql, not production ones.
+ * driverId is a prefill only - "Resolve id" asks the backend for the
+ * id the token actually owns.
+ * ------------------------------------------------------------------ */
+const ACCOUNTS = {
+  rider: [
+    { label: "Rahul Mehta", email: "rahul@ridehailing.com", password: "User@123" },
+    { label: "Priya Nair",  email: "priya@ridehailing.com", password: "User@123" },
+    { label: "Amit Joshi",  email: "amit@ridehailing.com",  password: "User@123" }
+  ],
+  driver: [
+    { label: "Raj Kumar",    email: "raj.kumar@ridehailing.com",    password: "Driver@123", driverId: 1, lat: 12.9750, lng: 77.5990, carType: "SEDAN" },
+    { label: "Amit Sharma",  email: "amit.sharma@ridehailing.com",  password: "Driver@123", driverId: 2, lat: 12.9820, lng: 77.6050, carType: "HATCHBACK" },
+    { label: "Vikram Singh", email: "vikram.singh@ridehailing.com", password: "Driver@123", driverId: 3, lat: 12.9352, lng: 77.6245, carType: "SEDAN" },
+    { label: "Neha Verma",   email: "neha.verma@ridehailing.com",   password: "Driver@123", driverId: 4, lat: 12.9141, lng: 77.6788, carType: "HATCHBACK" },
+    { label: "Kiran Rao",    email: "kiran.rao@ridehailing.com",    password: "Driver@123", driverId: 9,  lat: 12.9700, lng: 77.6040, carType: "AUTO" },
+    { label: "Suresh Babu",  email: "suresh.babu@ridehailing.com",  password: "Driver@123", driverId: 10, lat: 12.9780, lng: 77.5975, carType: "BIKE" }
+  ],
+  admin: [
+    { label: "Platform Admin", email: "admin@ridehailing.com", password: "Admin@123" }
+  ]
+};
+
+const state = {
+  sessions: { rider: null, driver: null, admin: null },
+  ride: null,
+  estimate: null,
+  lastIdemKey: null,
+  radiusKm: 5,
+  rules: [],
+  zones: [],
+  log: []
+};
+
+/* ----------------------------- helpers ---------------------------- */
+const $ = function (sel) { return document.querySelector(sel); };
+const $$ = function (sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); };
+
+function esc(v) {
+  return String(v === null || v === undefined ? "" : v)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function num(v, d) {
+  if (v === null || v === undefined || v === "") return "—";
+  return Number(v).toFixed(d === undefined ? 2 : d);
+}
+function baseUrl() { return $("#baseUrl").value.trim().replace(/\/+$/, ""); }
+
+function banner(id, message, kind) {
+  const el = $(id);
+  el.className = "banner " + (kind || "err") + (message ? " show" : "");
+  el.textContent = message || "";
+}
+
+function uuid() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+    const r = crypto.getRandomValues(new Uint8Array(1))[0] % 16;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+/* ------------------------- API + request log ---------------------- */
+async function api(role, method, path, body, opts) {
+  opts = opts || {};
+  const headers = { "Accept": "application/json" };
+  if (body !== undefined && body !== null) headers["Content-Type"] = "application/json";
+  const session = role ? state.sessions[role] : null;
+  if (session) headers["Authorization"] = "Bearer " + session.accessToken;
+  Object.assign(headers, opts.headers || {});
+
+  const started = performance.now();
+  let res = null, parsed = null, netError = null;
+  try {
+    res = await fetch(baseUrl() + path, {
+      method: method,
+      headers: headers,
+      body: (body === undefined || body === null) ? undefined : JSON.stringify(body)
+    });
+    const text = await res.text();
+    if (text) { try { parsed = JSON.parse(text); } catch (_) { parsed = text; } }
+  } catch (e) {
+    netError = e.message || String(e);
+  }
+
+  // The token never reaches the on-screen log.
+  const shownHeaders = Object.assign({}, headers);
+  if (shownHeaders.Authorization) shownHeaders.Authorization = "Bearer <jwt>";
+
+  if (!opts.quiet) {
+    state.log.unshift({
+      id: state.log.length + 1,
+      at: new Date().toLocaleTimeString(),
+      method: method,
+      path: path,
+      role: role || "public",
+      status: netError ? 0 : res.status,
+      ms: Math.round(performance.now() - started),
+      requestId: netError ? null : res.headers.get("X-Request-Id"),
+      request: body === undefined ? null : body,
+      reqHeaders: shownHeaders,
+      response: netError ? { networkError: netError } : parsed
+    });
+    renderLog();
+  }
+
+  if (netError) throw new Error("Cannot reach " + method + " " + path + " — " + netError);
+  return { status: res.status, ok: res.ok, json: parsed };
+}
+
+function apiErrorText(result) {
+  const j = result.json;
+  if (j && j.error) {
+    const details = j.error.details ? " " + JSON.stringify(j.error.details) : "";
+    return "[" + result.status + "] " + j.error.code + ": " + j.error.message + details;
+  }
+  if (typeof j === "string" && j) return "[" + result.status + "] " + j;
+  return "HTTP " + result.status;
+}
+
+function renderLog() {
+  const filter = $("#logFilter").value.trim().toLowerCase();
+  const rows = state.log.filter(function (e) {
+    return !filter
+      || e.path.toLowerCase().indexOf(filter) >= 0
+      || String(e.status).indexOf(filter) >= 0
+      || e.method.toLowerCase().indexOf(filter) >= 0;
+  });
+  $("#logList").innerHTML = rows.map(function (e) {
+    const cls = e.status === 0 ? "err" : e.status < 300 ? "ok" : e.status < 500 ? "warn" : "err";
+    return '<div class="log-item">'
+      + '<div class="log-head">'
+        + '<span class="muted">' + esc(e.at) + '</span>'
+        + '<span class="pill ' + cls + '">' + (e.status || "ERR") + '</span>'
+        + '<span>' + esc(e.method) + ' ' + esc(e.path) + '</span>'
+        + '<span class="muted">' + e.ms + 'ms</span>'
+        + '<span class="muted">' + esc(e.role) + '</span>'
+      + '</div>'
+      + '<div class="log-body">'
+        + (e.requestId ? '<div class="muted mono" style="font-size:11px">X-Request-Id: ' + esc(e.requestId) + '</div>' : '')
+        + (e.request ? '<div class="muted" style="font-size:11px;margin-top:6px">request</div><pre>' + esc(JSON.stringify(e.request, null, 2)) + '</pre>' : '')
+        + '<div class="muted" style="font-size:11px;margin-top:6px">response</div><pre>' + esc(JSON.stringify(e.response, null, 2)) + '</pre>'
+      + '</div></div>';
+  }).join("") || '<div class="muted" style="padding:10px">no calls yet</div>';
+}
+
+$("#logList").addEventListener("click", function (ev) {
+  const item = ev.target.closest(".log-item");
+  if (item) item.classList.toggle("open");
+});
+$("#logFilter").addEventListener("input", renderLog);
+$("#btnClearLog").addEventListener("click", function () { state.log = []; renderLog(); });
+
+function showFatal(err) { banner("#globalBanner", String(err && err.message ? err.message : err), "err"); }
+
+/* ---------------------------- sessions ---------------------------- */
+function fillAccountSelects() {
+  Object.keys(ACCOUNTS).forEach(function (role) {
+    const sel = document.querySelector('select[data-acc="' + role + '"]');
+    sel.innerHTML = ACCOUNTS[role].map(function (a, i) {
+      return '<option value="' + i + '">' + esc(a.label) + ' — ' + esc(a.email) + '</option>';
+    }).join("");
+  });
+}
+
+function selectedAccount(role) {
+  const sel = document.querySelector('select[data-acc="' + role + '"]');
+  return ACCOUNTS[role][Number(sel.value) || 0];
+}
+
+async function login(role) {
+  const acc = selectedAccount(role);
+  banner("#globalBanner", "");
+  const res = await api(null, "POST", "/api/v1/auth/login", { email: acc.email, password: acc.password });
+  if (!res.ok) {
+    state.sessions[role] = null;
+    renderSession(role);
+    banner("#globalBanner", "Login failed for " + acc.email + " — " + apiErrorText(res), "err");
+    return null;
+  }
+  const data = res.json.data;
+  state.sessions[role] = {
+    accessToken: data.accessToken,
+    userId: data.userId,
+    email: data.email,
+    role: data.role,
+    permissions: data.permissions || [],
+    account: acc
+  };
+  if (role === "driver" && acc.driverId) {
+    $("#driverId").value = acc.driverId;
+    $("#drvLat").value = acc.lat;
+    $("#drvLng").value = acc.lng;
+    drawMap();
+  }
+  renderSession(role);
+  return state.sessions[role];
+}
+
+function renderSession(role) {
+  const s = state.sessions[role];
+  const el = document.querySelector('[data-who="' + role + '"]');
+  if (!s) { el.className = "who muted"; el.textContent = "not signed in"; return; }
+  el.className = "who";
+  el.innerHTML = '<span class="pill ok">' + esc(s.role) + '</span> ' + esc(s.email)
+    + ' <span class="muted">· userId ' + s.userId + ' · ' + s.permissions.length + ' permissions</span>';
+}
+
+function requireSession(role, bannerId) {
+  if (!state.sessions[role]) {
+    banner(bannerId, "Sign in as " + role + " first (section 1).", "err");
+    return null;
+  }
+  banner(bannerId, "");
+  return state.sessions[role];
+}
+
+$$('[data-login]').forEach(function (b) {
+  b.addEventListener("click", function () { login(b.dataset.login).catch(showFatal); });
+});
+$$('[data-logout]').forEach(function (b) {
+  b.addEventListener("click", function () {
+    state.sessions[b.dataset.logout] = null;
+    renderSession(b.dataset.logout);
+  });
+});
+
+/* ----------------------------- health ----------------------------- */
+$("#btnHealth").addEventListener("click", async function () {
+  const pill = $("#healthPill");
+  try {
+    // Any HTTP answer proves the app is up. 401 is the expected answer here,
+    // because /configurations is a protected endpoint and no token is sent.
+    const res = await api(null, "GET", "/api/v1/configurations");
+    const up = res.ok || res.status === 401;
+    pill.className = "pill " + (up ? "ok" : "warn");
+    pill.textContent = up ? "backend up" : "HTTP " + res.status;
+  } catch (e) {
+    pill.className = "pill err";
+    pill.textContent = "unreachable";
+    showFatal(e);
+  }
+});
+
+/* ------------------------------ rider ----------------------------- */
+function bookingRequest() {
+  const coupon = $("#coupon").value;
+  const req = {
+    pickupLatitude: Number($("#pickLat").value),
+    pickupLongitude: Number($("#pickLng").value),
+    pickupAddress: $("#pickAddr").value || null,
+    dropLatitude: Number($("#dropLat").value),
+    dropLongitude: Number($("#dropLng").value),
+    dropAddress: $("#dropAddr").value || null,
+    carType: $("#carType").value
+  };
+  if (coupon) req.couponCode = coupon;
+  return req;
+}
+
+async function bookRide(reuseKey) {
+  if (!requireSession("rider", "#riderBanner")) return null;
+  const key = (reuseKey && state.lastIdemKey) ? state.lastIdemKey : uuid();
+  state.lastIdemKey = key;
+  $("#idemKeyLabel").textContent = "Idempotency-Key: " + key;
+  const res = await api("rider", "POST", "/api/v1/rides", bookingRequest(), { headers: { "Idempotency-Key": key } });
+  if (!res.ok) { banner("#riderBanner", apiErrorText(res), "err"); return null; }
+  state.ride = res.json.data;
+  banner("#riderBanner", "Ride #" + state.ride.id + " is " + state.ride.status
+    + (reuseKey ? " — replayed from the idempotency store, no new ride created" : ""), "ok");
+  renderRide();
+  return state.ride;
+}
+
+function renderRide() {
+  const r = state.ride;
+  if (!r) { $("#rideCard").innerHTML = ""; return; }
+  const statusCls = r.status === "COMPLETED" ? "ok"
+    : r.status === "CANCELLED" ? "err"
+    : r.status === "REQUESTED" ? "warn" : "info";
+  const f = r.fare || {};
+  const d = r.driver || {};
+  $("#rideCard").innerHTML =
+    '<div style="border:1px solid var(--line);border-radius:8px;padding:12px;background:var(--panel-2)">'
+    + '<div class="row" style="margin-bottom:10px;align-items:center">'
+      + '<strong>Ride #' + r.id + '</strong>'
+      + '<span class="pill ' + statusCls + '">' + esc(r.status) + '</span>'
+      + (r.carTypeUpgraded
+          ? '<span class="pill info">upgraded ' + esc(r.requestedCarType) + ' &rarr; ' + esc(r.assignedCarType) + ', no extra charge</span>'
+          : '')
+    + '</div>'
+    + '<div class="kv">'
+      + '<span class="k">driver</span><span>' + (r.driverId
+          ? esc(d.fullName || ("#" + r.driverId)) + ' <span class="muted">· ' + esc(d.phone || "")
+            + ' · rating ' + num(d.rating, 2) + ' · driverId ' + r.driverId + '</span>'
+          : '<span class="muted">not assigned</span>') + '</span>'
+      + '<span class="k">car</span><span>' + esc(r.assignedCarType || r.requestedCarType)
+        + (r.vehicleId ? ' <span class="muted">· vehicleId ' + r.vehicleId + '</span>' : '') + '</span>'
+      // Both are snapshots written when the driver was claimed, so they are shown together or not at all.
+      + (r.driverPickupDistanceKm == null && r.estimatedPickupEtaMinutes == null ? ''
+          : '<span class="k">driver to pickup</span><span>' + num(r.driverPickupDistanceKm, 2) + ' km'
+            + ' <span class="muted">· ETA ' + (r.estimatedPickupEtaMinutes == null ? "—" : r.estimatedPickupEtaMinutes)
+            + ' min</span> <span class="pill muted">straight line, at assignment</span></span>')
+      + '<span class="k">distance</span><span>' + num(r.distanceKm, 2) + ' km</span>'
+      + '<span class="k">rule / zone</span><span class="mono">' + esc(f.pricingRuleCode || "—") + ' / ' + esc(f.pricingZoneCode || "—") + '</span>'
+      + '<span class="k">distance fare</span><span>' + num(f.distanceFare) + '</span>'
+      + '<span class="k">car multiplier</span><span>&times; ' + num(f.carTypeMultiplier) + '</span>'
+      + '<span class="k">surge</span><span>&times; ' + num(f.surgeMultiplier) + '</span>'
+      + '<span class="k">minimum fare</span><span>' + num(f.minimumFare)
+        + (f.minimumFareApplied ? ' <span class="pill warn">applied</span>' : '') + '</span>'
+      + '<span class="k">before discount</span><span>' + num(f.fareBeforeDiscount) + '</span>'
+      + '<span class="k">coupon</span><span>' + (f.couponCode
+          ? esc(f.couponCode) + ' <span class="muted">(−' + num(f.discountAmount) + ')</span>'
+          : '<span class="muted">none</span>') + '</span>'
+      + '<span class="k"><strong>total fare</strong></span><span><strong>' + num(f.totalFare) + '</strong></span>'
+      + (r.cancelledBy
+          ? '<span class="k">cancelled by</span><span>' + esc(r.cancelledBy)
+            + ' <span class="muted">' + esc(r.cancellationReason || "") + '</span></span>'
+          : '')
+      // Only meaningful on a cancelled ride. Total fare stays the quoted price
+      // of the trip that never happened, so the fee is shown as its own line.
+      + (r.cancellationFee == null ? ''
+          : '<span class="k"><strong>cancellation fee</strong></span><span><strong>' + num(r.cancellationFee)
+            + '</strong>' + (Number(r.cancellationFee) === 0
+                ? ' <span class="pill ok">free — inside grace window</span>'
+                : ' <span class="pill warn">charged to rider</span>') + '</span>')
+      + paymentRows(r.payment)
+    + '</div>'
+    + ((r.driverPickupDistanceKm == null && r.estimatedPickupEtaMinutes == null) ? ''
+        : '<p class="hint" style="margin:10px 0 0">"Driver to pickup" is a straight-line haversine snapshot taken at '
+          + 'assignment — not road distance, and not tracked live. It never changes as the driver moves.</p>')
+    + '</div>';
+}
+
+/** Null until completion, and a decline arrives as FAILED with a reason rather than as an error. */
+function paymentRows(p) {
+  if (!p) {
+    return '<span class="k">payment</span><span class="muted">none yet — collected when the driver completes</span>';
+  }
+  const failed = p.status === "FAILED";
+  return '<span class="k"><strong>payment</strong></span><span>'
+      + '<span class="pill ' + (failed ? "err" : "ok") + '">' + esc(p.status) + '</span> '
+      + esc(p.method) + ' <strong>' + num(p.amount) + '</strong>'
+      + ' <span class="muted">· ' + esc(p.purpose) + '</span></span>'
+    + '<span class="k">reference</span><span class="mono">' + esc(p.reference || "—") + '</span>'
+    + (failed
+        ? '<span class="k" style="color:var(--err)">declined because</span>'
+          + '<span style="color:var(--err)">' + esc(p.failureReason || "unknown")
+          + ' <span class="muted">— the ride still completed; use "Retry payment" in section 3</span></span>'
+        : '');
+}
+
+/** Purpose is the column that matters: the cancellation fee is a separate line, never the fare. */
+function renderPayments(target, rows, note) {
+  if (!rows.length) { $(target).innerHTML = '<p class="muted">no payments for this ride yet</p>'; return; }
+  $(target).innerHTML = '<div style="overflow:auto"><table style="margin-top:10px"><thead><tr>'
+    + '<th>Purpose</th><th>Method</th><th>Status</th><th class="num">Amount</th><th>Reference</th>'
+    + '<th>Failure reason</th></tr></thead><tbody>'
+    + rows.map(function (p) {
+        const failed = p.status === "FAILED";
+        return '<tr><td>' + esc(p.purpose) + '</td><td>' + esc(p.method) + '</td>'
+          + '<td><span class="pill ' + (failed ? "err" : "ok") + '">' + esc(p.status) + '</span></td>'
+          + '<td class="num">' + num(p.amount) + '</td>'
+          + '<td class="mono" style="font-size:11.5px">' + esc(p.reference || "—") + '</td>'
+          + '<td class="muted" style="font-size:11.5px">' + esc(p.failureReason || "—") + '</td></tr>';
+      }).join("")
+    + '</tbody></table></div>'
+    + (note ? '<p class="hint" style="margin-top:8px">' + esc(note) + '</p>' : '');
+}
+
+/** The instrument every Complete path on this page sends, driver-chosen at completion time. */
+function paymentMethod() { return $("#payMethod").value; }
+
+/** Same endpoint for both roles — the rider holds PAYMENT_READ too, so only the token differs. */
+async function loadPayments(role, bannerId, target) {
+  if (!requireSession(role, bannerId)) return [];
+  if (!state.ride) { banner(bannerId, "No ride in this session yet — book one in section 2.", "err"); return []; }
+  const res = await api(role, "GET", "/api/v1/rides/" + state.ride.id + "/payment");
+  if (!res.ok) { banner(bannerId, apiErrorText(res), "err"); return []; }
+  const rows = res.json.data || [];
+  renderPayments(target, rows, "Every money line of ride #" + state.ride.id
+    + " — a cancellation fee appears here as its own CANCELLATION_FEE row and never on the ride's payment field.");
+  banner(bannerId, rows.length + " payment line(s) on ride #" + state.ride.id + ".", "ok");
+  return rows;
+}
+
+$("#btnRiderPayments").addEventListener("click", function () {
+  loadPayments("rider", "#riderBanner", "#riderPayments").catch(showFatal);
+});
+
+// The 403 is the point of this button, so it is reported as an expected answer, not as a failure.
+$("#btnRiderRetry").addEventListener("click", async function () {
+  if (!requireSession("rider", "#riderBanner")) return;
+  if (!state.ride) { banner("#riderBanner", "No ride in this session yet.", "err"); return; }
+  try {
+    const res = await api("rider", "POST", "/api/v1/rides/" + state.ride.id + "/payment/retry",
+      { paymentMethod: paymentMethod() });
+    banner("#riderBanner", res.ok
+      ? "Unexpected — the rider was allowed to retry and the payment is " + res.json.data.status
+      : apiErrorText(res) + " — expected: a rider may read payments but not collect them.",
+      res.ok ? "err" : "ok");
+  } catch (e) { showFatal(e); }
+});
+
+/**
+ * The fee column both rides tables share. A ride that was never cancelled has
+ * no fee at all, which is not the same as a fee of zero — zero means cancelled
+ * inside the grace window. Loose == null on purpose: the API is configured
+ * non_null, so an absent fee arrives as undefined rather than null.
+ */
+function cancellationFeeCell(r) {
+  if (r.cancellationFee == null) return '<td class="num muted">—</td>';
+  return Number(r.cancellationFee) === 0
+    ? '<td class="num muted">' + num(r.cancellationFee) + '</td>'
+    : '<td class="num" style="color:var(--warn)"><strong>' + num(r.cancellationFee) + '</strong></td>';
+}
+
+$("#btnBook").addEventListener("click", function () { bookRide(false).catch(showFatal); });
+$("#btnBookReplay").addEventListener("click", function () { bookRide(true).catch(showFatal); });
+
+$("#btnRefreshRide").addEventListener("click", async function () {
+  if (!requireSession("rider", "#riderBanner")) return;
+  if (!state.ride) { banner("#riderBanner", "No ride in this session yet.", "err"); return; }
+  try {
+    const res = await api("rider", "GET", "/api/v1/rides/" + state.ride.id);
+    if (!res.ok) { banner("#riderBanner", apiErrorText(res), "err"); return; }
+    state.ride = res.json.data;
+    renderRide();
+  } catch (e) { showFatal(e); }
+});
+
+$("#btnCancelRide").addEventListener("click", async function () {
+  if (!requireSession("rider", "#riderBanner")) return;
+  if (!state.ride) { banner("#riderBanner", "No ride in this session yet.", "err"); return; }
+  try {
+    const res = await api("rider", "POST", "/api/v1/rides/" + state.ride.id + "/cancel",
+      { reason: $("#cancelReason").value || null });
+    if (!res.ok) { banner("#riderBanner", apiErrorText(res), "err"); return; }
+    state.ride = res.json.data;
+    renderRide();
+    banner("#riderBanner", "Ride cancelled, driver released.", "ok");
+  } catch (e) { showFatal(e); }
+});
+
+/**
+ * The same trip as bookingRequest, without the fields only a booking uses. The
+ * addresses are left out because nothing stores them for a quote.
+ */
+function estimateRequest() {
+  const coupon = $("#coupon").value;
+  const req = {
+    pickupLatitude: Number($("#pickLat").value),
+    pickupLongitude: Number($("#pickLng").value),
+    dropLatitude: Number($("#dropLat").value),
+    dropLongitude: Number($("#dropLng").value),
+    carType: $("#carType").value
+  };
+  if (coupon) req.couponCode = coupon;
+  return req;
+}
+
+$("#btnEstimate").addEventListener("click", async function () {
+  if (!requireSession("rider", "#riderBanner")) return;
+  try {
+    const res = await api("rider", "POST", "/api/v1/pricing/quote", estimateRequest());
+    if (!res.ok) { banner("#riderBanner", apiErrorText(res), "err"); return; }
+    state.estimate = res.json.data;
+    renderEstimate();
+    const e = state.estimate;
+    // The coupon verdict is spelled out here because this is now the only place
+    // a rider can check one before booking.
+    const couponNote = !e.couponCode ? ""
+      : e.couponApplicable
+        ? " · " + e.couponCode + " applied, −" + num(e.discountAmount)
+        : " · " + e.couponCode + " NOT applied — " + e.couponReason + ": " + e.couponMessage;
+    banner("#riderBanner", "Estimated " + num(e.totalFare) + " over " + num(e.distanceKm, 2)
+      + " km — nothing was booked and no coupon use was taken." + couponNote,
+      (e.couponCode && !e.couponApplicable) ? "err" : "ok");
+  } catch (e) { showFatal(e); }
+});
+
+/**
+ * Deliberately the same tier level numbers the ride card shows, so a rider can
+ * hold the estimate against the booking that follows it and see they agree.
+ */
+function renderEstimate() {
+  const e = state.estimate;
+  if (!e) { $("#estimateCard").innerHTML = ""; return; }
+  // A rejected coupon carries a reason instead of a discount: the trip was
+  // still priced, just without the coupon.
+  const coupon = !e.couponCode
+    ? '<span class="muted">none</span>'
+    : e.couponApplicable
+      ? esc(e.couponCode) + ' <span class="muted">(−' + num(e.discountAmount) + ')</span>'
+      : esc(e.couponCode) + ' <span class="pill warn">not applied</span>'
+        + ' <span class="muted">' + esc(e.couponReason) + ': ' + esc(e.couponMessage) + '</span>';
+  $("#estimateCard").innerHTML =
+    '<div style="border:1px solid var(--line);border-radius:8px;padding:12px;background:var(--panel-2);margin-bottom:12px">'
+    + '<div class="row" style="margin-bottom:10px;align-items:center">'
+      + '<strong>Fare estimate</strong>'
+      + '<span class="pill info">quote only — no ride created</span>'
+    + '</div>'
+    + '<div class="kv">'
+      + '<span class="k">distance</span><span>' + num(e.distanceKm, 2) + ' km</span>'
+      + '<span class="k">rule / zone</span><span class="mono">' + esc(e.pricingRuleCode || "—")
+        + ' / ' + esc(e.pricingZoneCode || "—") + '</span>'
+      + '<span class="k">distance fare</span><span>' + num(e.distanceFare) + '</span>'
+      + '<span class="k">car multiplier</span><span>&times; ' + num(e.carTypeMultiplier) + '</span>'
+      + '<span class="k">surge</span><span>&times; ' + num(e.surgeMultiplier) + '</span>'
+      + '<span class="k">minimum fare</span><span>' + num(e.minimumFare)
+        + (e.minimumFareApplied ? ' <span class="pill warn">applied</span>' : '') + '</span>'
+      + '<span class="k">before discount</span><span>' + num(e.fareBeforeDiscount) + '</span>'
+      + '<span class="k">coupon</span><span>' + coupon + '</span>'
+      + '<span class="k"><strong>estimated total</strong></span><span><strong>' + num(e.totalFare) + '</strong></span>'
+    + '</div></div>';
+}
+
+$("#btnMyRides").addEventListener("click", async function () {
+  const s = requireSession("rider", "#riderBanner");
+  if (!s) return;
+  try {
+    const res = await api("rider", "GET", "/api/v1/users/" + s.userId + "/rides?page=0&size=10");
+    if (!res.ok) { banner("#riderBanner", apiErrorText(res), "err"); return; }
+    const rides = (res.json.data && res.json.data.items) || [];
+    $("#riderRides").innerHTML = rides.length
+      ? '<table style="margin-top:10px"><thead><tr><th>Ride</th><th>Status</th><th>Car</th>'
+        + '<th class="num">Km</th><th class="num">Fare</th><th class="num">Fee</th></tr></thead><tbody>'
+        + rides.map(function (r) {
+            return '<tr><td class="mono">#' + r.id + '</td><td>' + esc(r.status) + '</td>'
+              + '<td>' + esc(r.assignedCarType || r.requestedCarType) + '</td>'
+              + '<td class="num">' + num(r.distanceKm, 2) + '</td>'
+              + '<td class="num">' + num(r.fare && r.fare.totalFare) + '</td>'
+              + cancellationFeeCell(r) + '</tr>';
+          }).join("") + '</tbody></table>'
+      : '<p class="muted">no rides yet</p>';
+  } catch (e) { showFatal(e); }
+});
+
+/* ----------------------------- driver ----------------------------- */
+$("#btnDriverStatus").addEventListener("click", async function () {
+  if (!requireSession("driver", "#driverBanner")) return;
+  try {
+    const res = await api("driver", "PUT", "/api/v1/drivers/" + $("#driverId").value + "/status",
+      { status: $("#driverStatus").value });
+    if (!res.ok) { banner("#driverBanner", apiErrorText(res), "err"); return; }
+    renderDriverProfile(res.json.data);
+    banner("#driverBanner", "Driver is now " + res.json.data.status + ".", "ok");
+  } catch (e) { showFatal(e); }
+});
+
+$("#btnPing").addEventListener("click", async function () {
+  if (!requireSession("driver", "#driverBanner")) return;
+  try {
+    const res = await api("driver", "PUT", "/api/v1/drivers/" + $("#driverId").value + "/location",
+      { latitude: Number($("#drvLat").value), longitude: Number($("#drvLng").value) });
+    banner("#driverBanner", res.ok
+      ? "Position published to the Redis geo index (204, no DB write on this path)."
+      : apiErrorText(res), res.ok ? "ok" : "err");
+    drawMap();
+  } catch (e) { showFatal(e); }
+});
+
+/**
+ * Keeps the signed-in driver inside the Redis geo index. A real driver app
+ * pings continuously; without that the freshness key expires mid ride and the
+ * driver silently drops out of matching. The interval is well under
+ * driver.location.ttl.seconds so the entry never goes stale.
+ */
+const AUTO_PING_INTERVAL_MS = 20000;
+let autoPingTimer = null;
+
+function startAutoPing() {
+  if (autoPingTimer) return true;
+  if (!requireSession("driver", "#driverBanner")) return false;
+  autoPingTimer = setInterval(function () { $("#btnPing").click(); }, AUTO_PING_INTERVAL_MS);
+  $("#btnAutoPing").textContent = "Auto-ping: on (20s)";
+  $("#btnPing").click();
+  return true;
+}
+
+function stopAutoPing() {
+  if (!autoPingTimer) return;
+  clearInterval(autoPingTimer);
+  autoPingTimer = null;
+  $("#btnAutoPing").textContent = "Auto-ping: off";
+}
+
+$("#btnAutoPing").addEventListener("click", function () {
+  if (autoPingTimer) {
+    stopAutoPing();
+  } else {
+    startAutoPing();
+  }
+});
+
+// A different driver means a different token and a different geo member, so the
+// old loop would keep refreshing whoever was signed in before.
+document.querySelector('select[data-acc="driver"]').addEventListener("change", stopAutoPing);
+$$('[data-logout="driver"]').forEach(function (b) { b.addEventListener("click", stopAutoPing); });
+
+$("#btnDriverProfile").addEventListener("click", async function () {
+  if (!requireSession("driver", "#driverBanner")) return;
+  try {
+    const res = await api("driver", "GET", "/api/v1/drivers/" + $("#driverId").value);
+    if (!res.ok) { banner("#driverBanner", apiErrorText(res), "err"); return; }
+    renderDriverProfile(res.json.data);
+  } catch (e) { showFatal(e); }
+});
+
+function renderDriverProfile(d) {
+  const statusCls = d.status === "AVAILABLE" ? "ok" : d.status === "BUSY" ? "warn" : "muted";
+  $("#driverProfile").innerHTML = '<div class="kv" style="margin:8px 0">'
+    + '<span class="k">driver</span><span>' + esc(d.fullName)
+      + ' <span class="muted">· driverId ' + d.id + ' · userId ' + d.userId + '</span></span>'
+    + '<span class="k">status</span><span><span class="pill ' + statusCls + '">' + esc(d.status) + '</span></span>'
+    + '<span class="k">licence</span><span class="mono">' + esc(d.licenseNumber) + '</span>'
+    + '<span class="k">rating / rides</span><span>' + num(d.rating, 2) + ' · ' + d.totalRides + '</span>'
+    + '</div>';
+}
+
+$("#btnResolveDriver").addEventListener("click", async function () {
+  if (!requireSession("driver", "#driverBanner")) return;
+  banner("#driverBanner", "Probing driver ids 1..12 …", "ok");
+  for (let id = 1; id <= 12; id++) {
+    try {
+      // Quiet: only the hit is worth showing, not eleven 403s.
+      const res = await api("driver", "GET", "/api/v1/drivers/" + id, undefined, { quiet: true });
+      if (res.ok) {
+        $("#driverId").value = id;
+        renderDriverProfile(res.json.data);
+        banner("#driverBanner", "This token owns driverId " + id + ".", "ok");
+        drawMap();
+        return;
+      }
+    } catch (e) { showFatal(e); return; }
+  }
+  banner("#driverBanner", "No driver id in 1..12 belongs to this token.", "err");
+});
+
+$("#btnDriverRides").addEventListener("click", function () { loadDriverRides().catch(showFatal); });
+
+async function loadDriverRides() {
+  if (!requireSession("driver", "#driverBanner")) return [];
+  const res = await api("driver", "GET", "/api/v1/drivers/" + $("#driverId").value + "/rides?page=0&size=10");
+  if (!res.ok) { banner("#driverBanner", apiErrorText(res), "err"); return []; }
+  const rides = (res.json.data && res.json.data.items) || [];
+  $("#driverRides").innerHTML = rides.length
+    ? '<table><thead><tr><th>Ride</th><th>Status</th><th>Car</th><th class="num">Km</th>'
+      + '<th class="num">Fare</th><th class="num">Fee</th><th>Actions</th></tr></thead><tbody>'
+      + rides.map(function (r) {
+          return '<tr><td class="mono">#' + r.id + '</td>'
+            + '<td>' + esc(r.status) + '</td>'
+            + '<td>' + esc(r.assignedCarType || r.requestedCarType) + '</td>'
+            + '<td class="num">' + num(r.distanceKm, 2) + '</td>'
+            + '<td class="num">' + num(r.fare && r.fare.totalFare) + '</td>'
+            + cancellationFeeCell(r)
+            + '<td>'
+              + (r.status === "DRIVER_ASSIGNED" ? '<button class="sm" data-ride-action="start" data-ride="' + r.id + '">Start</button> ' : '')
+              + (r.status === "STARTED" ? '<button class="sm" data-ride-action="complete" data-ride="' + r.id + '">Complete</button> ' : '')
+              + ((r.status === "DRIVER_ASSIGNED" || r.status === "STARTED")
+                  ? '<button class="sm" data-ride-action="cancel" data-ride="' + r.id + '">Cancel</button>' : '')
+            + '</td></tr>';
+        }).join("") + '</tbody></table>'
+    : '<p class="muted">no rides for this driver</p>';
+  return rides;
+}
+
+$("#driverRides").addEventListener("click", async function (ev) {
+  const btn = ev.target.closest("[data-ride-action]");
+  if (!btn) return;
+  const action = btn.dataset.rideAction;
+  const rideId = btn.dataset.ride;
+  try {
+    // Complete carries the payment method; it is @NotNull, so an absent body is a 400.
+    const body = action === "cancel" ? { reason: "Driver cancelled from the demo console" }
+      : action === "complete" ? { paymentMethod: paymentMethod() }
+      : null;
+    const res = await api("driver", "POST", "/api/v1/rides/" + rideId + "/" + action, body);
+    if (!res.ok) { banner("#driverBanner", apiErrorText(res), "err"); return; }
+    const p = res.json.data.payment;
+    banner("#driverBanner", "Ride #" + rideId + " → " + res.json.data.status
+      + (p ? " · payment " + p.method + " " + p.status + (p.status === "FAILED"
+          ? " (" + (p.failureReason || "declined") + ") — retry it below" : "") : ""),
+      (p && p.status === "FAILED") ? "err" : "ok");
+    if (state.ride && String(state.ride.id) === String(rideId)) {
+      state.ride = res.json.data;
+      renderRide();
+    }
+    await loadDriverRides();
+  } catch (e) { showFatal(e); }
+});
+
+$("#btnDriverPayments").addEventListener("click", function () {
+  loadPayments("driver", "#driverBanner", "#driverPayments").catch(showFatal);
+});
+
+$("#btnRetryPayment").addEventListener("click", async function () {
+  if (!requireSession("driver", "#driverBanner")) return;
+  if (!state.ride) { banner("#driverBanner", "No ride in this session yet — book one in section 2.", "err"); return; }
+  try {
+    const res = await api("driver", "POST", "/api/v1/rides/" + state.ride.id + "/payment/retry",
+      { paymentMethod: paymentMethod() });
+    if (!res.ok) { banner("#driverBanner", apiErrorText(res), "err"); return; }
+    const p = res.json.data;
+    // The retry answers with the payment alone, so the ride is re-read to keep the card in step.
+    const ride = await api("driver", "GET", "/api/v1/rides/" + state.ride.id);
+    if (ride.ok) { state.ride = ride.json.data; renderRide(); }
+    await loadPayments("driver", "#driverBanner", "#driverPayments");
+    banner("#driverBanner", "Retry on ride #" + state.ride.id + " → " + p.method + " " + p.status
+      + (p.status === "FAILED"
+          ? " (" + (p.failureReason || "declined") + ") — still declined, try another method"
+          : " — collected"),
+      p.status === "FAILED" ? "err" : "ok");
+  } catch (e) { showFatal(e); }
+});
+
+/* ------------------------------ admin ----------------------------- */
+$$('.tabs button').forEach(function (b) {
+  b.addEventListener("click", function () {
+    $$('.tabs button').forEach(function (x) { x.classList.remove("active"); });
+    $$('.tabpane').forEach(function (x) { x.classList.remove("active"); });
+    b.classList.add("active");
+    $("#tab-" + b.dataset.tab).classList.add("active");
+  });
+});
+
+$("#btnLoadCfg").addEventListener("click", async function () {
+  if (!requireSession("admin", "#adminBanner")) return;
+  try {
+    const res = await api("admin", "GET", "/api/v1/configurations");
+    if (!res.ok) { banner("#adminBanner", apiErrorText(res), "err"); return; }
+    const rows = res.json.data || [];
+    const radius = rows.filter(function (c) { return c.key === "ride.search.radius.km"; })[0];
+    if (radius) { state.radiusKm = Number(radius.value) || state.radiusKm; drawMap(); }
+    $("#cfgTable").innerHTML = '<div style="overflow:auto"><table><thead><tr>'
+      + '<th>Key</th><th>Value</th><th>Type</th><th></th></tr></thead><tbody>'
+      + rows.map(function (c) {
+          return '<tr><td class="mono">' + esc(c.key) + '</td>'
+            + '<td><input data-cfg-key="' + esc(c.key) + '" value="' + esc(c.value) + '" style="width:100%"></td>'
+            + '<td class="muted">' + esc(c.valueType) + '</td>'
+            + '<td><button class="sm" data-cfg-save="' + esc(c.key) + '">Save</button></td></tr>';
+        }).join("") + '</tbody></table></div>';
+  } catch (e) { showFatal(e); }
+});
+
+$("#cfgTable").addEventListener("click", async function (ev) {
+  const btn = ev.target.closest("[data-cfg-save]");
+  if (!btn) return;
+  const key = btn.dataset.cfgSave;
+  const value = document.querySelector('[data-cfg-key="' + key + '"]').value;
+  try {
+    const res = await api("admin", "PUT", "/api/v1/configurations/" + encodeURIComponent(key), { value: value });
+    banner("#adminBanner", res.ok
+      ? key + " = " + value + " saved. The update evicts the cache entry, so it applies to the next request."
+      : apiErrorText(res), res.ok ? "ok" : "err");
+    if (res.ok && key === "ride.search.radius.km") {
+      state.radiusKm = Number(value) || state.radiusKm;
+      drawMap();
+    }
+  } catch (e) { showFatal(e); }
+});
+
+async function loadAdminList(path, target) {
+  if (!requireSession("admin", "#adminBanner")) return;
+  try {
+    const res = await api("admin", "GET", path);
+    if (!res.ok) { banner("#adminBanner", apiErrorText(res), "err"); return; }
+    const data = res.json.data;
+    const rows = Array.isArray(data) ? data : (data && data.items) || [];
+    $(target).innerHTML = renderGenericTable(rows);
+  } catch (e) { showFatal(e); }
+}
+
+/* ---------------------- pricing rules (editable) ------------------- */
+async function loadRules() {
+  if (!requireSession("admin", "#adminBanner")) return [];
+  const res = await api("admin", "GET", "/api/v1/pricing/rules");
+  if (!res.ok) { banner("#adminBanner", apiErrorText(res), "err"); return []; }
+  state.rules = res.json.data || [];
+  renderRulesTable();
+  fillRuleSelects();
+  return state.rules;
+}
+
+function fillRuleSelects() {
+  const options = state.rules.map(function (r) {
+    return '<option value="' + esc(r.code) + '">' + esc(r.code) + '</option>';
+  }).join("");
+  $("#nzRule").innerHTML = options || '<option value="">load rules first</option>';
+}
+
+function renderRulesTable() {
+  if (!state.rules.length) { $("#rulesTable").innerHTML = '<p class="muted">no rules</p>'; return; }
+  $("#rulesTable").innerHTML = '<div style="overflow:auto"><table><thead><tr>'
+    + '<th>Code</th><th class="num">Min fare</th><th class="num">Surge</th><th>Tiers /km</th>'
+    + '<th>Car ×</th><th>Active</th><th></th></tr></thead><tbody>'
+    + state.rules.map(function (r) {
+        // Loose == on purpose: the API is configured non_null, so the open ended
+        // tier arrives with toKm absent rather than null.
+        const tiers = r.tiers.map(function (t) {
+          return (t.toKm == null ? t.fromKm + "+" : t.fromKm + "-" + t.toKm) + " @" + t.ratePerKm;
+        }).join(", ");
+        const mults = r.carTypeMultipliers.map(function (m) { return m.carType + " ×" + m.multiplier; }).join(", ");
+        return '<tr><td class="mono">' + esc(r.code) + '</td>'
+          + '<td><input data-rule-min="' + r.id + '" value="' + esc(r.minimumFare) + '" class="tiny"></td>'
+          + '<td><input data-rule-surge="' + r.id + '" value="' + esc(r.surgeMultiplier) + '" class="tiny"></td>'
+          + '<td class="muted" style="font-size:11.5px">' + esc(tiers) + '</td>'
+          + '<td class="muted" style="font-size:11.5px">' + esc(mults) + '</td>'
+          + '<td><input type="checkbox" data-rule-active="' + r.id + '"' + (r.active ? ' checked' : '') + ' style="width:auto"></td>'
+          + '<td><button class="sm" data-rule-save="' + r.id + '">Save</button></td></tr>';
+      }).join("")
+    + '</tbody></table></div>';
+}
+
+/** PUT replaces the whole rule, so the untouched children are sent back as they were. */
+$("#rulesTable").addEventListener("click", async function (ev) {
+  const btn = ev.target.closest("[data-rule-save]");
+  if (!btn) return;
+  const id = Number(btn.dataset.ruleSave);
+  const rule = state.rules.filter(function (r) { return r.id === id; })[0];
+  if (!rule) return;
+  const body = {
+    code: rule.code,
+    name: rule.name,
+    minimumFare: Number(document.querySelector('[data-rule-min="' + id + '"]').value),
+    surgeMultiplier: Number(document.querySelector('[data-rule-surge="' + id + '"]').value),
+    active: document.querySelector('[data-rule-active="' + id + '"]').checked,
+    tiers: rule.tiers.map(function (t) { return { fromKm: t.fromKm, toKm: t.toKm, ratePerKm: t.ratePerKm }; }),
+    carTypeMultipliers: rule.carTypeMultipliers.map(function (m) {
+      return { carType: m.carType, multiplier: m.multiplier };
+    })
+  };
+  try {
+    const res = await api("admin", "PUT", "/api/v1/pricing/rules/" + id, body);
+    banner("#adminBanner", res.ok
+      ? rule.code + " saved — surge ×" + body.surgeMultiplier + ", min " + body.minimumFare
+      : apiErrorText(res), res.ok ? "ok" : "err");
+    if (res.ok) await loadRules();
+  } catch (e) { showFatal(e); }
+});
+
+$("#btnCreateRule").addEventListener("click", async function () {
+  if (!requireSession("admin", "#adminBanner")) return;
+  const tier = function (f, t, r) {
+    const to = $(t).value.trim();
+    return { fromKm: Number($(f).value), toKm: to === "" ? null : Number(to), ratePerKm: Number($(r).value) };
+  };
+  const body = {
+    code: $("#nrCode").value.trim(),
+    name: $("#nrName").value.trim(),
+    minimumFare: Number($("#nrMinFare").value),
+    surgeMultiplier: Number($("#nrSurge").value),
+    active: true,
+    tiers: [tier("#nrT1From", "#nrT1To", "#nrT1Rate"),
+            tier("#nrT2From", "#nrT2To", "#nrT2Rate"),
+            tier("#nrT3From", "#nrT3To", "#nrT3Rate")],
+    // All four categories: an omitted one falls back to ×1.00 and would price a bike as a sedan.
+    carTypeMultipliers: [{ carType: "SEDAN", multiplier: Number($("#nrSedan").value) },
+                         { carType: "HATCHBACK", multiplier: Number($("#nrHatch").value) },
+                         { carType: "AUTO", multiplier: Number($("#nrAuto").value) },
+                         { carType: "BIKE", multiplier: Number($("#nrBike").value) }]
+  };
+  try {
+    const res = await api("admin", "POST", "/api/v1/pricing/rules", body);
+    banner("#adminBanner", res.ok ? "Rule " + body.code + " created." : apiErrorText(res), res.ok ? "ok" : "err");
+    if (res.ok) await loadRules();
+  } catch (e) { showFatal(e); }
+});
+
+/* ---------------------- pricing zones (editable) ------------------- */
+async function loadZones() {
+  if (!requireSession("admin", "#adminBanner")) return [];
+  if (!state.rules.length) { await loadRules(); }
+  const res = await api("admin", "GET", "/api/v1/pricing/zones");
+  if (!res.ok) { banner("#adminBanner", apiErrorText(res), "err"); return []; }
+  // Shown in the order the engine actually walks them, not the order the API returns.
+  state.zones = (res.json.data || []).slice().sort(function (a, b) {
+    return (b.priority - a.priority) || (Number(a.radiusKm) - Number(b.radiusKm));
+  });
+  renderZonesTable();
+  const radiusZone = state.zones.filter(function (z) { return z.code === "BANGALORE"; })[0];
+  if (radiusZone) { drawMap(); }
+  return state.zones;
+}
+
+function renderZonesTable() {
+  if (!state.zones.length) { $("#zonesTable").innerHTML = '<p class="muted">no zones</p>'; return; }
+  const ruleOptions = state.rules.map(function (r) { return r.code; });
+  $("#zonesTable").innerHTML = '<div style="overflow:auto"><table><thead><tr>'
+    + '<th>#</th><th>Code</th><th>Rule</th><th>Centre</th><th class="num">Radius</th>'
+    + '<th class="num">Priority</th><th>Active</th><th></th></tr></thead><tbody>'
+    + state.zones.map(function (z, i) {
+        const opts = (ruleOptions.indexOf(z.pricingRuleCode) < 0 ? [z.pricingRuleCode] : []).concat(ruleOptions);
+        return '<tr><td class="muted">' + (z.active ? (i + 1) : "—") + '</td>'
+          + '<td class="mono">' + esc(z.code) + '</td>'
+          + '<td><select data-zone-rule="' + z.id + '">'
+            + opts.map(function (c) {
+                return '<option value="' + esc(c) + '"' + (c === z.pricingRuleCode ? ' selected' : '') + '>' + esc(c) + '</option>';
+              }).join("")
+          + '</select></td>'
+          + '<td class="mono" style="font-size:11.5px">' + esc(z.centreLatitude) + ', ' + esc(z.centreLongitude) + '</td>'
+          + '<td><input data-zone-radius="' + z.id + '" value="' + esc(z.radiusKm) + '" class="tiny"></td>'
+          + '<td><input data-zone-priority="' + z.id + '" value="' + z.priority + '" class="tiny"></td>'
+          + '<td><input type="checkbox" data-zone-active="' + z.id + '"' + (z.active ? ' checked' : '') + ' style="width:auto"></td>'
+          + '<td><button class="sm" data-zone-save="' + z.id + '">Save</button></td></tr>';
+      }).join("")
+    + '</tbody></table></div>'
+    + '<p class="hint" style="margin-top:8px">The # column is the order the engine checks active zones in. '
+    + 'The first one containing the pickup wins, so a small high priority zone can sit inside a big city zone.</p>';
+}
+
+$("#zonesTable").addEventListener("click", async function (ev) {
+  const btn = ev.target.closest("[data-zone-save]");
+  if (!btn) return;
+  const id = Number(btn.dataset.zoneSave);
+  const zone = state.zones.filter(function (z) { return z.id === id; })[0];
+  if (!zone) return;
+  const body = {
+    code: zone.code,
+    name: zone.name,
+    pricingRuleCode: document.querySelector('[data-zone-rule="' + id + '"]').value,
+    centreLatitude: Number(zone.centreLatitude),
+    centreLongitude: Number(zone.centreLongitude),
+    radiusKm: Number(document.querySelector('[data-zone-radius="' + id + '"]').value),
+    priority: Number(document.querySelector('[data-zone-priority="' + id + '"]').value),
+    active: document.querySelector('[data-zone-active="' + id + '"]').checked
+  };
+  try {
+    const res = await api("admin", "PUT", "/api/v1/pricing/zones/" + id, body);
+    banner("#adminBanner", res.ok
+      ? zone.code + " saved — priority " + body.priority + ", radius " + body.radiusKm + " km, active " + body.active
+      : apiErrorText(res), res.ok ? "ok" : "err");
+    if (res.ok) await loadZones();
+  } catch (e) { showFatal(e); }
+});
+
+$("#btnCreateZone").addEventListener("click", async function () {
+  if (!requireSession("admin", "#adminBanner")) return;
+  const body = {
+    code: $("#nzCode").value.trim(),
+    name: $("#nzName").value.trim(),
+    pricingRuleCode: $("#nzRule").value,
+    centreLatitude: Number($("#nzLat").value),
+    centreLongitude: Number($("#nzLng").value),
+    radiusKm: Number($("#nzRadius").value),
+    priority: Number($("#nzPriority").value),
+    active: $("#nzActive").checked
+  };
+  try {
+    const res = await api("admin", "POST", "/api/v1/pricing/zones", body);
+    banner("#adminBanner", res.ok
+      ? "Zone " + body.code + " created at priority " + body.priority + " with radius " + body.radiusKm + " km."
+      : apiErrorText(res), res.ok ? "ok" : "err");
+    if (res.ok) await loadZones();
+  } catch (e) { showFatal(e); }
+});
+
+$("#btnLoadRules").addEventListener("click", function () { loadRules().catch(showFatal); });
+$("#btnLoadZones").addEventListener("click", function () { loadZones().catch(showFatal); });
+$("#btnLoadAudit").addEventListener("click", function () {
+  const entity = $("#auditEntity").value.trim();
+  loadAdminList("/api/v1/admin/audit-logs?page=0&size=15"
+    + (entity ? "&entityType=" + encodeURIComponent(entity) : ""), "#auditTable");
+});
+
+/* ------------------------- fleet / live drivers -------------------- */
+$("#btnLoadFleet").addEventListener("click", function () { loadFleet().catch(showFatal); });
+
+async function loadFleet() {
+  if (!requireSession("admin", "#adminBanner")) return null;
+  const status = $("#fleetStatus").value;
+  const res = await api("admin", "GET", "/api/v1/drivers/fleet?page=0&size=20"
+    + (status ? "&status=" + encodeURIComponent(status) : ""));
+  if (!res.ok) {
+    // A token minted before V19 has no DRIVER_FLEET_READ claim, and no amount of retrying fixes that.
+    banner("#adminBanner", apiErrorText(res) + (res.status === 403
+      ? " — this admin token was minted before DRIVER_FLEET_READ existed; log the admin out and in again (section 1)."
+      : ""), "err");
+    return null;
+  }
+  renderFleet(res.json.data);
+  banner("#adminBanner", "");
+  return res.json.data;
+}
+
+function renderFleet(d) {
+  const s = d.summary || {};
+  const byStatus = s.byStatus || {};
+  const available = Number(byStatus.AVAILABLE || 0);
+  const ghosts = Number(s.onDutyWithoutLiveLocation || 0);
+  const tile = function (n, label, cls) {
+    return '<div class="tile' + (cls ? " " + cls : "") + '">'
+      + '<div class="n">' + esc(n === undefined || n === null ? "—" : n) + '</div>'
+      + '<div class="l">' + esc(label) + '</div></div>';
+  };
+  $("#fleetSummary").innerHTML = '<div class="tiles">'
+      + tile(s.bookable, "bookable now", "hero")
+      + tile(ghosts, "on duty, no live position", ghosts > 0 ? "alarm" : "")
+      + tile(available, "available")
+      + tile(byStatus.BUSY || 0, "busy")
+      + tile(byStatus.OFFLINE || 0, "offline")
+      + tile(s.reportingLocation, "reporting location")
+      + tile(s.totalDrivers, "total drivers")
+      + tile((s.locationTtlSeconds || 0) + "s", "location ttl")
+    + '</div>'
+    + (ghosts > 0
+        ? '<div class="banner err show">' + ghosts + ' driver(s) are on duty in MySQL but invisible to dispatch — '
+          + 'AVAILABLE ' + available + ' against bookable ' + s.bookable + '. Their Redis position expired past '
+          + (s.locationTtlSeconds || 0) + 's, or they hold no active vehicle, so they can never be matched.</div>'
+        : '<div class="banner ok show">No ghosts — every on-duty driver is still reporting a live position, so '
+          + 'AVAILABLE and bookable agree.</div>');
+
+  const page = d.drivers || {};
+  const items = page.items || [];
+  $("#fleetTable").innerHTML = items.length
+    ? '<div style="overflow:auto"><table><thead><tr><th>Id</th><th>Driver</th><th>Status</th><th>Categories</th>'
+      + '<th class="num">Rating</th><th class="num">Rides</th><th>Position</th><th>Bookable</th>'
+      + '<th>Last status change</th></tr></thead><tbody>'
+      + items.map(function (r) {
+          const st = r.status === "AVAILABLE" ? "ok" : r.status === "BUSY" ? "warn" : "muted";
+          return '<tr><td class="mono">' + r.driverId + '</td><td>' + esc(r.fullName) + '</td>'
+            + '<td><span class="pill ' + st + '">' + esc(r.status) + '</span></td>'
+            + '<td class="muted">' + esc((r.activeCarTypes || []).join(", ") || "no active vehicle") + '</td>'
+            + '<td class="num">' + num(r.rating, 2) + '</td>'
+            + '<td class="num">' + r.totalRides + '</td>'
+            + '<td>' + (r.reportingLocation
+                ? '<span class="pill ok">live</span>' : '<span class="pill err">stale</span>') + '</td>'
+            + '<td>' + (r.bookable
+                ? '<span class="pill ok">yes</span>' : '<span class="pill muted">no</span>') + '</td>'
+            + '<td class="muted mono" style="font-size:11px">' + esc(r.lastLocationAt || "—") + '</td></tr>';
+        }).join("")
+      + '</tbody></table></div>'
+      + '<p class="hint" style="margin-top:8px">page ' + ((page.page || 0) + 1) + ' of ' + (page.totalPages || 1)
+      + ' · ' + (page.totalElements || 0) + ' row(s) matching the filter. The tiles above always cover the whole '
+      + 'fleet, never just this page. "Last status change" is the MySQL snapshot written when a driver went on or off '
+      + 'duty — it is not the last GPS ping, so only the Position column proves presence.</p>'
+    : '<p class="muted">no drivers match this filter</p>';
+}
+
+/** Flat table for admin read models: the column set follows the payload. */
+function renderGenericTable(rows) {
+  if (!rows.length) return '<p class="muted">no rows</p>';
+  const cols = Object.keys(rows[0]).filter(function (k) {
+    const v = rows[0][k];
+    return v === null || typeof v !== "object" || Array.isArray(v);
+  });
+  return '<div style="overflow:auto"><table><thead><tr>'
+    + cols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join("")
+    + '</tr></thead><tbody>'
+    + rows.map(function (r) {
+        return '<tr>' + cols.map(function (c) {
+          const v = r[c];
+          const text = Array.isArray(v) ? v.join(", ") : String(v === null || v === undefined ? "" : v);
+          const cls = typeof v === "number" ? "num" : (text.length > 40 ? "wide" : "");
+          return '<td class="' + cls + '">' + esc(text) + '</td>';
+        }).join("") + '</tr>';
+      }).join("")
+    + '</tbody></table></div>';
+}
+
+/* ------------------------------- map ------------------------------ */
+function haversineKm(a, b) {
+  const R = 6371;
+  const toRad = function (v) { return (v * Math.PI) / 180; };
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const h = Math.pow(Math.sin(dLat / 2), 2)
+    + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.pow(Math.sin(dLng / 2), 2);
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function drawMap() {
+  const pickup = { lat: Number($("#pickLat").value), lng: Number($("#pickLng").value) };
+  const drop = { lat: Number($("#dropLat").value), lng: Number($("#dropLng").value) };
+
+  const drivers = ACCOUNTS.driver.map(function (d) {
+    return { label: d.label, lat: d.lat, lng: d.lng, carType: d.carType, driverId: d.driverId };
+  });
+  // The driver panel can move whichever driver it is signed in as.
+  const editedId = Number($("#driverId").value);
+  drivers.forEach(function (d) {
+    if (d.driverId === editedId) {
+      const lat = Number($("#drvLat").value);
+      const lng = Number($("#drvLng").value);
+      if (isFinite(lat) && isFinite(lng)) { d.lat = lat; d.lng = lng; }
+    }
+  });
+
+  const pts = [pickup, drop].concat(drivers).filter(function (p) {
+    return isFinite(p.lat) && isFinite(p.lng);
+  });
+  if (pts.length < 2) return;
+
+  const lats = pts.map(function (p) { return p.lat; });
+  const lngs = pts.map(function (p) { return p.lng; });
+  const pad = 0.014;
+  const minLat = Math.min.apply(null, lats) - pad;
+  const maxLat = Math.max.apply(null, lats) + pad;
+  const minLng = Math.min.apply(null, lngs) - pad;
+  const maxLng = Math.max.apply(null, lngs) + pad;
+  const W = 600, H = 300, M = 30;
+  const x = function (lng) { return M + ((lng - minLng) / ((maxLng - minLng) || 1)) * (W - 2 * M); };
+  const y = function (lat) { return H - M - ((lat - minLat) / ((maxLat - minLat) || 1)) * (H - 2 * M); };
+
+  // One degree of latitude is ~111 km, so the radius is drawn in latitude
+  // units - honest north-south, slightly optimistic east-west.
+  const rPx = Math.abs(y(pickup.lat) - y(pickup.lat + state.radiusKm / 111));
+
+  const parts = ['<rect x="0" y="0" width="600" height="300" fill="#0a0d13"/>'];
+  parts.push('<line x1="' + x(pickup.lng) + '" y1="' + y(pickup.lat) + '" x2="' + x(drop.lng)
+    + '" y2="' + y(drop.lat) + '" stroke="#39445a" stroke-width="1" stroke-dasharray="2 3"/>');
+  parts.push('<circle cx="' + x(pickup.lng) + '" cy="' + y(pickup.lat) + '" r="' + rPx
+    + '" fill="rgba(79,140,255,0.07)" stroke="#4f8cff" stroke-dasharray="4 4" stroke-width="1"/>');
+
+  // Labels flip to the left of their dot in the right half of the canvas,
+  // otherwise long driver names run off the edge.
+  function label(px, py, text, fill, size) {
+    const right = px > W / 2;
+    return '<text x="' + (right ? px - 10 : px + 10) + '" y="' + py + '" fill="' + fill
+      + '" font-size="' + size + '"' + (right ? ' text-anchor="end"' : '') + '>' + text + '</text>';
+  }
+
+  drivers.forEach(function (d) {
+    const km = haversineKm(pickup, d);
+    const inside = km <= state.radiusKm;
+    // Colour is radius, letter is category: a driver inside the radius still cannot serve another family.
+    parts.push('<circle cx="' + x(d.lng) + '" cy="' + y(d.lat) + '" r="7" fill="'
+      + (inside ? "#2ecc71" : "#4a5566") + '"/>');
+    parts.push('<text x="' + x(d.lng) + '" y="' + (y(d.lat) + 3.5) + '" fill="#0a0d13" font-size="9.5"'
+      + ' font-weight="700" text-anchor="middle">' + esc(String(d.carType || "?").charAt(0)) + '</text>');
+    parts.push(label(x(d.lng), y(d.lat) + 4,
+      esc(d.label) + ' · ' + esc(d.carType) + ' · ' + km.toFixed(1) + ' km', "#8b95a7", 10));
+  });
+
+  // Pickup and drop are drawn last so their markers sit on top, and their
+  // labels are pushed further out to clear a driver parked next to them.
+  parts.push('<circle cx="' + x(pickup.lng) + '" cy="' + y(pickup.lat) + '" r="7" fill="#4f8cff"/>');
+  parts.push(label(x(pickup.lng), y(pickup.lat) - 12, "pickup", "#e6e9ef", 11));
+  parts.push('<circle cx="' + x(drop.lng) + '" cy="' + y(drop.lat) + '" r="7" fill="#f4b740"/>');
+  parts.push(label(x(drop.lng), y(drop.lat) - 12, "drop", "#e6e9ef", 11));
+  parts.push('<text x="14" y="20" fill="#8b95a7" font-size="10">search radius ' + state.radiusKm + ' km</text>');
+
+  $("#map").innerHTML = parts.join("");
+}
+
+["pickLat", "pickLng", "dropLat", "dropLng", "drvLat", "drvLng", "driverId"].forEach(function (id) {
+  $("#" + id).addEventListener("input", drawMap);
+});
+
+/**
+ * Landmark coordinates, approximate. The zone column says which zone each
+ * pickup resolves to, so a preset also demonstrates which pricing rule applies.
+ */
+const PRESETS = [
+  { label: "Bangalore · MG Road → Koramangala (~5 km) · zone BANGALORE",
+    pick: [12.9716, 77.5946, "MG Road, Bangalore"], drop: [12.9352, 77.6245, "Koramangala, Bangalore"] },
+  { label: "Bangalore · MG Road → Airport (~28 km) · zone BANGALORE",
+    pick: [12.9716, 77.5946, "MG Road, Bangalore"], drop: [13.1986, 77.7066, "Kempegowda Airport, Bangalore"] },
+  { label: "Bangalore · Airport → MG Road (~28 km) · zone BLR_AIRPORT if active",
+    pick: [13.1986, 77.7066, "Kempegowda Airport, Bangalore"], drop: [12.9716, 77.5946, "MG Road, Bangalore"] },
+  { label: "Delhi · Connaught Place → Noida Sector 18 · zone DELHI",
+    pick: [28.6315, 77.2167, "Connaught Place, Delhi"], drop: [28.5700, 77.3210, "Noida Sector 18"] },
+  { label: "Delhi · IGI T3 → Gurgaon Cyber City · zone DELHI",
+    pick: [28.5562, 77.1000, "IGI Airport T3, Delhi"], drop: [28.4950, 77.0890, "Cyber City, Gurgaon"] },
+  { label: "Pune · Shivajinagar → Hinjewadi · zone PUNE",
+    pick: [18.5308, 73.8475, "Shivajinagar, Pune"], drop: [18.5913, 73.7389, "Hinjewadi Phase 1, Pune"] },
+  { label: "Pune · Kharadi → Shivajinagar · zone PUNE",
+    pick: [18.5515, 73.9410, "Kharadi, Pune"], drop: [18.5308, 73.8475, "Shivajinagar, Pune"] },
+  { label: "Mumbai · Bandra → BKC · NO zone, falls back to pricing.active.rule",
+    pick: [19.0596, 72.8295, "Bandra, Mumbai"], drop: [19.0662, 72.8697, "BKC, Mumbai"] },
+  { label: "Chennai · T Nagar → Airport · NO zone, falls back",
+    pick: [13.0418, 80.2341, "T Nagar, Chennai"], drop: [12.9941, 80.1709, "Chennai Airport"] },
+  { label: "Hyderabad · Hitec City → Banjara Hills · NO zone, falls back",
+    pick: [17.4483, 78.3915, "Hitec City, Hyderabad"], drop: [17.4156, 78.4347, "Banjara Hills, Hyderabad"] }
+];
+
+function fillPresetSelects() {
+  $("#tripPreset").innerHTML = PRESETS.map(function (p, i) {
+    return '<option value="' + i + '">' + esc(p.label) + '</option>';
+  }).join("");
+  // The zone form reuses the same landmarks as candidate centres.
+  $("#nzPreset").innerHTML = '<option value="">— pick a landmark —</option>'
+    + PRESETS.map(function (p, i) {
+        return '<option value="' + i + '">' + esc(p.pick[2]) + '</option>';
+      }).join("");
+}
+
+$("#tripPreset").addEventListener("change", function () {
+  const p = PRESETS[Number($("#tripPreset").value)];
+  if (!p) return;
+  $("#pickLat").value = p.pick[0];
+  $("#pickLng").value = p.pick[1];
+  $("#pickAddr").value = p.pick[2];
+  $("#dropLat").value = p.drop[0];
+  $("#dropLng").value = p.drop[1];
+  $("#dropAddr").value = p.drop[2];
+  drawMap();
+  showTripDistance();
+});
+
+$("#nzPreset").addEventListener("change", function () {
+  const p = PRESETS[Number($("#nzPreset").value)];
+  if (!p) return;
+  $("#nzLat").value = p.pick[0];
+  $("#nzLng").value = p.pick[1];
+});
+
+/**
+ * Every preset outside Bangalore needs a driver nearby or the booking answers
+ * NO_DRIVER_IN_RADIUS, so this drops the signed-in driver ~600 m from the
+ * pickup and pings. It moves a real driver's real position - nothing faked.
+ */
+$("#btnDriverToPickup").addEventListener("click", function () {
+  if (!requireSession("driver", "#riderBanner")) return;
+  $("#drvLat").value = (Number($("#pickLat").value) + 0.005).toFixed(4);
+  $("#drvLng").value = (Number($("#pickLng").value) + 0.004).toFixed(4);
+  drawMap();
+  $("#btnPing").click();
+  banner("#riderBanner", "Driver moved next to the pickup and position published.", "ok");
+});
+
+function showTripDistance() {
+  const a = { lat: Number($("#pickLat").value), lng: Number($("#pickLng").value) };
+  const b = { lat: Number($("#dropLat").value), lng: Number($("#dropLng").value) };
+  const el = $("#tripDistance");
+  if (!isFinite(a.lat) || !isFinite(b.lat)) { el.textContent = ""; return; }
+  const km = haversineKm(a, b);
+  // The server rounds distance to 3 decimals and rejects a zero, so warn before
+  // the request is even sent.
+  if (km.toFixed(3) === "0.000") {
+    el.style.color = "var(--err)";
+    el.textContent = "pickup and drop are the same point — the server will reject this as INVALID_TRIP";
+  } else {
+    el.style.color = "";
+    el.textContent = "straight-line " + km.toFixed(2) + " km";
+  }
+}
+["pickLat", "pickLng", "dropLat", "dropLng"].forEach(function (id) {
+  $("#" + id).addEventListener("input", showTripDistance);
+});
+
+/* -------------------------- scripted demos ------------------------ */
+function demoLog(line, kind) {
+  const color = kind === "err" ? "var(--err)" : kind === "ok" ? "var(--ok)" : "var(--muted)";
+  $("#demoOut").insertAdjacentHTML("beforeend", '<div style="color:' + color + '">' + esc(line) + '</div>');
+}
+
+async function ensureLogin(role) {
+  return state.sessions[role] || await login(role);
+}
+
+/**
+ * A booking can only match a driver whose position is currently in the Redis
+ * geo index, so every scripted demo that books has to put one there first.
+ */
+async function ensureDriverOnline() {
+  if (!await ensureLogin("driver")) { demoLog("driver login failed", "err"); return false; }
+  const driverId = $("#driverId").value;
+  const status = await api("driver", "PUT", "/api/v1/drivers/" + driverId + "/status", { status: "AVAILABLE" });
+  if (!status.ok) {
+    demoLog("cannot bring driver " + driverId + " online: " + apiErrorText(status), "err");
+    demoLog("  finish or cancel their active ride first (section 3, 'My rides')", "err");
+    return false;
+  }
+  // Auto-ping rather than a single position write: a scripted ride outlives
+  // driver.location.ttl.seconds, and a driver who stops reporting mid ride is
+  // evicted from the geo index and cannot be matched on the next booking.
+  startAutoPing();
+  return true;
+}
+
+$("#btnRunDemo").addEventListener("click", async function () {
+  $("#demoOut").innerHTML = "";
+  try {
+    demoLog("· signing in driver and rider …");
+    if (!await ensureDriverOnline()) return;
+    if (!await ensureLogin("rider")) { demoLog("rider login failed", "err"); return; }
+    demoLog("· driver " + $("#driverId").value + " is AVAILABLE with a fresh position");
+
+    demoLog("· rider books");
+    const ride = await bookRide(false);
+    if (!ride) { demoLog("booking failed — open the request log for the error", "err"); return; }
+    demoLog("  ride #" + ride.id + " " + ride.status + " · driver " + (ride.driverId || "none")
+      + " · fare " + num(ride.fare && ride.fare.totalFare), "ok");
+    if (!ride.driverId) { demoLog("no driver was assigned, stopping here", "err"); return; }
+
+    demoLog("· driver starts the ride");
+    let res = await api("driver", "POST", "/api/v1/rides/" + ride.id + "/start");
+    if (!res.ok) { demoLog("start failed: " + apiErrorText(res), "err"); return; }
+    state.ride = res.json.data; renderRide();
+
+    demoLog("· driver completes the ride and collects " + paymentMethod());
+    res = await api("driver", "POST", "/api/v1/rides/" + ride.id + "/complete",
+      { paymentMethod: paymentMethod() });
+    if (!res.ok) { demoLog("complete failed: " + apiErrorText(res), "err"); return; }
+    state.ride = res.json.data; renderRide();
+    banner("#riderBanner", "Ride #" + state.ride.id + " is " + state.ride.status + ".", "ok");
+    demoLog("  ride #" + ride.id + " " + state.ride.status + " · total "
+      + num(state.ride.fare && state.ride.fare.totalFare) + " · driver released", "ok");
+    const paid = state.ride.payment;
+    if (paid) {
+      demoLog("  payment " + paid.method + " " + paid.status + " · " + num(paid.amount)
+        + (paid.status === "FAILED" ? " · declined: " + (paid.failureReason || "unknown") : " · " + paid.reference),
+        paid.status === "FAILED" ? "err" : "ok");
+    }
+    await loadDriverRides();
+  } catch (e) { demoLog(String(e.message || e), "err"); }
+});
+
+$("#btnRunUpgrade").addEventListener("click", async function () {
+  $("#demoOut").innerHTML = "";
+  try {
+    demoLog("· ask for a HATCHBACK; if only a SEDAN is free in radius the rider is upgraded free");
+    demoLog("  (pick a SEDAN driver in section 1 — Raj Kumar or Vikram Singh — for this to trigger)");
+    demoLog("  AUTO and BIKE are never substituted, so Kiran Rao and Suresh Babu cannot serve this request");
+    if (!await ensureDriverOnline()) return;
+    if (!await ensureLogin("rider")) { demoLog("rider login failed", "err"); return; }
+    $("#carType").value = "HATCHBACK";
+    const ride = await bookRide(false);
+    if (!ride) { demoLog("booking failed — open the request log for the error", "err"); return; }
+    demoLog("  requested " + ride.requestedCarType + " · assigned " + ride.assignedCarType
+      + " · upgraded=" + ride.carTypeUpgraded + " · multiplier "
+      + num(ride.fare && ride.fare.carTypeMultiplier), ride.carTypeUpgraded ? "ok" : null);
+    if (!ride.carTypeUpgraded) {
+      demoLog("  no upgrade this run — a hatchback was available in radius, so nothing to upgrade");
+    }
+  } catch (e) { demoLog(String(e.message || e), "err"); }
+});
+
+$("#btnRunPayments").addEventListener("click", async function () {
+  $("#demoOut").innerHTML = "";
+  try {
+    const method = paymentMethod();
+    demoLog("· book, start, complete with " + method + ", then read every money line back");
+    if (!await ensureDriverOnline()) return;
+    if (!await ensureLogin("rider")) { demoLog("rider login failed", "err"); return; }
+    // Asking for the signed-in driver's own category keeps the run deterministic across families.
+    $("#carType").value = selectedAccount("driver").carType;
+    demoLog("  asking for " + $("#carType").value + ", the category driver "
+      + $("#driverId").value + " actually drives");
+
+    const ride = await bookRide(false);
+    if (!ride) { demoLog("booking failed — open the request log for the error", "err"); return; }
+    if (!ride.driverId) { demoLog("no driver was assigned, stopping here", "err"); return; }
+    demoLog("  ride #" + ride.id + " " + ride.status + " · fare " + num(ride.fare && ride.fare.totalFare)
+      + " · driver " + num(ride.driverPickupDistanceKm, 2) + " km away, ETA "
+      + (ride.estimatedPickupEtaMinutes == null ? "—" : ride.estimatedPickupEtaMinutes) + " min", "ok");
+    demoLog("  payment is " + (ride.payment ? ride.payment.status : "null — money moves at completion, not at booking"));
+
+    let res = await api("driver", "POST", "/api/v1/rides/" + ride.id + "/start");
+    if (!res.ok) { demoLog("start failed: " + apiErrorText(res), "err"); return; }
+    demoLog("  " + res.json.data.status);
+
+    res = await api("driver", "POST", "/api/v1/rides/" + ride.id + "/complete", { paymentMethod: method });
+    if (!res.ok) { demoLog("complete failed: " + apiErrorText(res), "err"); return; }
+    state.ride = res.json.data; renderRide();
+    const p = state.ride.payment;
+    demoLog("  " + state.ride.status + " · payment " + (p ? p.method + " " + p.status + " · " + num(p.amount) : "missing"),
+      (p && p.status === "SUCCESS") ? "ok" : "err");
+    if (p && p.status === "FAILED") {
+      demoLog("  declined: " + (p.failureReason || "unknown")
+        + " — the ride still completed; press 'Retry payment' in section 3 or clear "
+        + "payment.simulated.failure.methods in the Configurations tab", "err");
+    }
+
+    const rows = await loadPayments("driver", "#driverBanner", "#driverPayments");
+    demoLog("· GET /rides/" + ride.id + "/payment → " + rows.length + " line(s)");
+    rows.forEach(function (row) {
+      demoLog("  " + row.purpose + " · " + row.method + " · " + row.status + " · " + num(row.amount)
+        + " · " + (row.reference || "no reference"));
+    });
+  } catch (e) { demoLog(String(e.message || e), "err"); }
+});
+
+$("#btnRunIdem").addEventListener("click", async function () {
+  $("#demoOut").innerHTML = "";
+  try {
+    if (!await ensureDriverOnline()) return;
+    if (!await ensureLogin("rider")) { demoLog("rider login failed", "err"); return; }
+    demoLog("· first booking, fresh Idempotency-Key");
+    const first = await bookRide(false);
+    if (!first) { demoLog("booking failed — open the request log for the error", "err"); return; }
+    demoLog("  ride #" + first.id, "ok");
+    demoLog("· same key sent again");
+    const second = await bookRide(true);
+    if (!second) { demoLog("replay failed — open the request log for the error", "err"); return; }
+    demoLog(second.id === first.id
+      ? "  ride #" + second.id + " returned from the idempotency store — no duplicate booking"
+      : "  a different ride #" + second.id + " was created — idempotency did NOT hold",
+      second.id === first.id ? "ok" : "err");
+  } catch (e) { demoLog(String(e.message || e), "err"); }
+});
+
+$("#btnRunRateLimit").addEventListener("click", async function () {
+  $("#demoOut").innerHTML = "";
+  try {
+    if (!await ensureLogin("driver")) { demoLog("driver login failed", "err"); return; }
+    const driverId = $("#driverId").value;
+    demoLog("· sending location pings until the Redis rate limiter answers 429");
+    for (let i = 1; i <= 40; i++) {
+      const res = await api("driver", "PUT", "/api/v1/drivers/" + driverId + "/location",
+        { latitude: Number($("#drvLat").value), longitude: Number($("#drvLng").value) });
+      if (res.status === 429) {
+        demoLog("  ping #" + i + " → " + apiErrorText(res), "ok");
+        return;
+      }
+    }
+    demoLog("  40 pings all accepted — lower api.rate-limit.location.max in section 5 to see a 429");
+  } catch (e) { demoLog(String(e.message || e), "err"); }
+});
+
+/* ------------------------------- init ----------------------------- */
+fillAccountSelects();
+document.querySelector('select[data-acc="driver"]').addEventListener("change", function () {
+  const acc = selectedAccount("driver");
+  $("#driverId").value = acc.driverId;
+  $("#drvLat").value = acc.lat;
+  $("#drvLng").value = acc.lng;
+  drawMap();
+});
+fillPresetSelects();
+renderLog();
+drawMap();
+showTripDistance();
+$("#btnHealth").click();
+</script>
+</body>
+</html>

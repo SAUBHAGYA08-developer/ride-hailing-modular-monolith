@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RideHailing · Rider</title>
+<link rel="stylesheet" href="shared.css">
+</head>
+<body>
+<div id="chrome"></div>
+<div class="wrap">
+
+  <div class="card">
+    <h2>Trip</h2>
+    <div class="row">
+      <div class="field" style="min-width:230px"><label>Trip preset</label><select id="tripPreset"></select></div>
+      <div class="field"><label>Pickup lat</label><input id="pickLat" class="narrow" value="12.9716"></div>
+      <div class="field"><label>Pickup lng</label><input id="pickLng" class="narrow" value="77.5946"></div>
+      <div class="field" style="flex:1; min-width:200px"><label>Pickup address</label><input id="pickAddr" value="MG Road, Bangalore"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Drop lat</label><input id="dropLat" class="narrow" value="12.9352"></div>
+      <div class="field"><label>Drop lng</label><input id="dropLng" class="narrow" value="77.6245"></div>
+      <div class="field" style="flex:1; min-width:200px"><label>Drop address</label><input id="dropAddr" value="Koramangala, Bangalore"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Car type</label>
+        <select id="carType">
+          <option>SEDAN</option><option selected>HATCHBACK</option><option>AUTO</option><option>BIKE</option>
+        </select>
+      </div>
+      <div class="field"><label>Coupon (optional)</label><input id="coupon" class="narrow" placeholder="FLAT50"></div>
+      <button id="btnEstimate">Get estimate</button>
+      <button id="btnBook" class="primary">Book ride</button>
+    </div>
+    <div class="muted" style="font-size:12px">
+      A HATCHBACK request may be served by a SEDAN, but AUTO and BIKE are only ever served by their own category — substitution never crosses a family.
+    </div>
+    <div class="row" style="margin-top:8px">
+      <div class="field" style="flex:1; min-width:240px"><label>Idempotency-Key sent with the booking</label><input id="idemKey" class="mono" spellcheck="false"></div>
+      <button id="btnNewKey" class="sm">New key</button>
+      <button id="btnReplay" class="sm">Replay same key</button>
+    </div>
+    <div class="muted" style="font-size:12px">
+      Replaying the same key must return the first ride again instead of booking a second one.
+    </div>
+    <div id="tripBanner" class="banner"></div>
+  </div>
+
+  <div class="card">
+    <h2>Estimate</h2>
+    <div id="estBanner" class="banner"></div>
+    <div id="estBox" class="muted">No estimate yet — nothing is reserved by pricing a trip.</div>
+  </div>
+
+  <div class="card">
+    <h2>Active ride</h2>
+    <div class="row">
+      <div class="field"><label>Ride id</label><input id="rideId" class="narrow mono" placeholder="—"></div>
+      <button id="btnRefresh">Refresh</button>
+      <button id="btnCancel">Cancel ride</button>
+      <div class="field" style="flex:1; min-width:200px"><label>Cancellation reason</label><input id="cancelReason" value="Rider changed plans"></div>
+      <span id="pollPill" class="pill muted">idle</span>
+    </div>
+    <div id="rideBanner" class="banner"></div>
+    <div id="rideBox" class="muted">No ride loaded.</div>
+    <div class="muted" style="font-size:12px; margin-top:8px">
+      The API has no push channel, so this page polls GET /rides/{id} every 4s while the ride is live and stops on COMPLETED, CANCELLED or a hidden tab.
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>History</h2>
+    <div class="row">
+      <button id="btnHistory">Load history</button>
+      <button id="btnPrev" class="sm">Prev</button>
+      <button id="btnNext" class="sm">Next</button>
+      <span id="pageInfo" class="muted"></span>
+    </div>
+    <div id="histBanner" class="banner"></div>
+    <div class="scroll"><table>
+      <thead><tr><th>Id</th><th>Status</th><th>Car</th><th>Km</th><th>Fare</th><th>Requested</th><th></th></tr></thead>
+      <tbody id="histRows"></tbody>
+    </table></div>
+    <div id="payBox" style="margin-top:10px"></div>
+  </div>
+
+  <div class="card">
+    <h2>Demo</h2>
+    <div class="row">
+      <button id="btnDemo" class="primary">Run estimate → book → refresh</button>
+    </div>
+    <pre id="demoOut" class="mono muted" style="white-space:pre-wrap; margin:0">Not run yet.</pre>
+  </div>
+
+  <div class="card">
+    <h2>Requests</h2>
+    <div id="reqLog" class="mono"></div>
+  </div>
+</div>
+
+<script src="shared.js"></script>
+<script>
+if (RH.requireRole("USER")) {
+  RH.mountChrome("Rider");
+
+  const POLL_MS = 4000;
+  const TERMINAL = ["COMPLETED", "CANCELLED"];
+  const BTNS = ["btnEstimate", "btnBook", "btnReplay", "btnNewKey", "btnRefresh", "btnCancel", "btnHistory", "btnPrev", "btnNext", "btnDemo"];
+
+  let inFlight = false, timer = null, page = 0, pages = 1, ride = null;
+
+  // Same decode as RH.roleFromJwt; the JWT subject is the rider's own userId.
+  function userIdFromJwt(jwt) {
+    try {
+      const b = jwt.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+      return JSON.parse(decodeURIComponent(escape(atob(b)))).sub || null;
+    } catch { return null; }
+  }
+  const ME = userIdFromJwt(RH.token());
+
+  const setBusy = (b) => BTNS.forEach(id => { const el = RH.$(id); if (el) el.disabled = b; });
+
+  // One in-flight request at a time, so a double click cannot double-book.
+  async function guard(fn) {
+    if (inFlight) return;
+    inFlight = true; setBusy(true);
+    try { await fn(); } finally { inFlight = false; setBusy(false); }
+  }
+
+  function hint(e) {
+    if (e.code === "NO_DRIVER_IN_RADIUS") return " No driver has reported a position within driver.location.ttl.seconds (60s by default), so the match radius is empty — have a driver ping a location, then retry.";
+    if (e.code === "IDEMPOTENCY_KEY_REUSED") return " That key was already used with a different trip — press New key.";
+    if (e.code === "RATE_LIMIT_EXCEEDED") return " Quotes and bookings are rate limited per user; wait a moment.";
+    return "";
+  }
+
+  const newKey = () => "rider-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+  RH.$("idemKey").value = newKey();
+
+  const num = (id) => Number(RH.$(id).value);
+  const str = (id) => RH.$(id).value.trim();
+
+  function tripBody(withAddresses) {
+    const b = {
+      pickupLatitude: num("pickLat"), pickupLongitude: num("pickLng"),
+      dropLatitude: num("dropLat"), dropLongitude: num("dropLng"),
+      carType: RH.$("carType").value,
+      couponCode: str("coupon") || null,
+    };
+    if (withAddresses) { b.pickupAddress = str("pickAddr"); b.dropAddress = str("dropAddr"); }
+    return b;
+  }
+
+  const rowsOf = (pairs) => pairs.map(([k, v]) => `<div class="k">${RH.esc(k)}</div><div>${v}</div>`).join("");
+  const statusPill = (s) => `<span class="pill ${s === "COMPLETED" ? "ok" : s === "CANCELLED" ? "bad" : "warn"}">${RH.esc(s)}</span>`;
+
+  async function doEstimate() {
+    RH.banner("estBanner", "");
+    const est = await RH.api("/pricing/quote", { method: "POST", body: tripBody(false) });
+    RH.$("estBox").innerHTML = `<div class="kv">` + rowsOf([
+      ["Distance km", RH.fmt(est.distanceKm)],
+      ["Zone / rule", `<span class="mono">${RH.esc(est.pricingZoneCode || "—")} / ${RH.esc(est.pricingRuleCode || "—")}</span>`],
+      ["Distance fare", RH.fmt(est.distanceFare)],
+      ["Car type multiplier", "×" + RH.fmt(est.carTypeMultiplier)],
+      ["Surge multiplier", "×" + RH.fmt(est.surgeMultiplier)],
+      ["Minimum fare", RH.fmt(est.minimumFare) + (est.minimumFareApplied ? ` <span class="pill warn">applied</span>` : "")],
+      ["Fare before discount", RH.fmt(est.fareBeforeDiscount)],
+      ["Coupon", est.couponCode ? `<span class="mono">${RH.esc(est.couponCode)}</span> <span class="pill ${est.couponApplicable ? "ok" : "bad"}">${est.couponApplicable ? "applicable" : RH.esc(est.couponReason || "rejected")}</span>` : "—"],
+      ["Discount", RH.fmt(est.discountAmount)],
+      ["Total fare", `<b>${RH.fmt(est.totalFare)}</b>`],
+    ]) + `</div>`;
+    if (est.couponCode && !est.couponApplicable) RH.banner("estBanner", est.couponMessage || ("Coupon rejected: " + est.couponReason), "info");
+    return est;
+  }
+
+  async function doBook(key) {
+    RH.banner("tripBanner", "");
+    const r = await RH.api("/rides", { method: "POST", body: tripBody(true), headers: { "Idempotency-Key": key } });
+    RH.$("rideId").value = r.id;
+    render(r);
+    return r;
+  }
+
+  async function doRefresh() {
+    const id = str("rideId");
+    if (!id) throw new RH.ApiError("NO_RIDE", "Book a ride, or type a ride id first.", 0);
+    const r = await RH.api("/rides/" + encodeURIComponent(id));
+    render(r);
+    return r;
+  }
+
+  function render(r) {
+    ride = r;
+    RH.banner("rideBanner", "");
+    const d = r.driver;
+    const upgraded = r.carTypeUpgraded || (r.assignedCarType && r.assignedCarType !== r.requestedCarType);
+    const f = r.fare || {};
+    const p = r.payment;
+
+    const trip = rowsOf([
+      ["Status", statusPill(r.status)],
+      ["Ride", `<span class="mono">#${RH.esc(r.id)}</span>`],
+      ["Driver", d ? `${RH.esc(d.fullName)} <span class="muted mono">${RH.esc(d.phone || "")}</span> <span class="pill">★ ${RH.fmt(d.rating)}</span>` : `<span class="muted">not assigned yet</span>`],
+      ["Car type", `${RH.esc(r.requestedCarType || "—")} → ${RH.esc(r.assignedCarType || "—")} ` + (upgraded ? `<span class="pill warn">upgraded</span>` : "")],
+      ["Vehicle", r.vehicle
+        ? `<span class="mono">${RH.esc(r.vehicle.registrationNumber)}</span> · ${RH.esc([r.vehicle.make, r.vehicle.model].filter(Boolean).join(" "))}${r.vehicle.color ? " · " + RH.esc(r.vehicle.color) : ""} <span class="pill">${RH.esc(r.vehicle.carType)}</span>`
+        : (r.vehicleId ? `<span class="mono">#${RH.esc(r.vehicleId)}</span>` : "—")],
+      ["Trip distance km", RH.fmt(r.distanceKm)],
+      ["Pickup", RH.esc(r.pickupAddress || "—")],
+      ["Drop", RH.esc(r.dropAddress || "—")],
+      ["Driver pickup km", RH.fmt(r.driverPickupDistanceKm)],
+      ["Pickup ETA", r.estimatedPickupEtaMinutes == null ? "—" : r.estimatedPickupEtaMinutes + " min"],
+      ["Requested / assigned", RH.esc(RH.when(r.requestedAt)) + " · " + RH.esc(RH.when(r.assignedAt))],
+      ["Started / completed", RH.esc(RH.when(r.startedAt)) + " · " + RH.esc(RH.when(r.completedAt))],
+    ]);
+
+    const fare = rowsOf([
+      ["Zone / rule", `<span class="mono">${RH.esc(f.pricingZoneCode || "—")} / ${RH.esc(f.pricingRuleCode || "—")}</span>`],
+      ["Distance fare", RH.fmt(f.distanceFare)],
+      ["Car type multiplier", "×" + RH.fmt(f.carTypeMultiplier)],
+      ["Surge multiplier", "×" + RH.fmt(f.surgeMultiplier)],
+      ["Minimum fare", RH.fmt(f.minimumFare) + (f.minimumFareApplied ? ` <span class="pill warn">applied</span>` : "")],
+      ["Before discount", RH.fmt(f.fareBeforeDiscount)],
+      ["Coupon", f.couponCode ? `<span class="mono">${RH.esc(f.couponCode)}</span>` : "—"],
+      ["Discount", RH.fmt(f.discountAmount)],
+      ["Total fare", `<b>${RH.fmt(f.totalFare)}</b>`],
+      ["Cancellation fee", r.cancellationFee == null ? "—" : `<b>${RH.fmt(r.cancellationFee)}</b>`],
+      ["Cancelled by / reason", r.cancelledAt ? `${RH.esc(r.cancelledBy || "—")} · ${RH.esc(r.cancellationReason || "—")}` : "—"],
+      ["Payment", p ? `<span class="pill ${p.status === "SUCCESS" ? "ok" : "bad"}">${RH.esc(p.status)}</span> ${RH.esc(p.method || "")} ${RH.fmt(p.amount)} <span class="muted mono">${RH.esc(p.reference || "")}</span>${p.failureReason ? ` <span class="muted">${RH.esc(p.failureReason)}</span>` : ""}` : `<span class="muted">not collected yet</span>`],
+    ]);
+
+    RH.$("rideBox").innerHTML =
+      `<div class="tiles" style="margin-bottom:10px">
+         <div class="tile"><div class="k">Status</div><div class="n" style="font-size:18px">${RH.esc(r.status)}</div></div>
+         <div class="tile ${upgraded ? "alert" : ""}"><div class="k">Assigned car</div><div class="n" style="font-size:18px">${RH.esc(r.assignedCarType || "—")}</div></div>
+         <div class="tile"><div class="k">Pickup ETA</div><div class="n">${r.estimatedPickupEtaMinutes == null ? "—" : RH.esc(r.estimatedPickupEtaMinutes)}</div></div>
+         <div class="tile"><div class="k">Total fare</div><div class="n">${RH.fmt(f.totalFare)}</div></div>
+       </div>
+       <div class="row" style="align-items:flex-start">
+         <div class="kv grow" style="min-width:280px">${trip}</div>
+         <div class="kv grow" style="min-width:280px">${fare}</div>
+       </div>
+       <div class="muted" style="font-size:12px; margin-top:8px">
+         Driver pickup km is a straight-line haversine snapshot taken at assignment — not road distance, and it does not move as the driver drives.
+       </div>`;
+
+    schedulePoll();
+  }
+
+  function schedulePoll() {
+    stopPoll();
+    if (!ride || TERMINAL.includes(ride.status)) { setPill(ride && TERMINAL.includes(ride.status) ? "terminal — polling off" : "idle", "muted"); return; }
+    if (document.hidden) { setPill("tab hidden — polling paused", "muted"); return; }
+    setPill("polling every " + (POLL_MS / 1000) + "s", "ok");
+    timer = setInterval(async () => {
+      if (inFlight || document.hidden) return;
+      try {
+        const r = await RH.api("/rides/" + encodeURIComponent(ride.id));
+        render(r);
+      } catch (e) {
+        stopPoll();
+        setPill("polling stopped", "bad");
+        RH.banner("rideBanner", e.message + hint(e));
+      }
+    }, POLL_MS);
+  }
+
+  function stopPoll() { if (timer) { clearInterval(timer); timer = null; } }
+
+  function setPill(text, kind) { const el = RH.$("pollPill"); el.className = "pill " + (kind === "muted" ? "" : kind); el.textContent = text; }
+
+  document.addEventListener("visibilitychange", () => schedulePoll());
+
+  // Short hops stay inside the 5 km search radius; the long ones show tiered pricing and the zone rule.
+  const TRIPS = [
+    { label: "MG Road → Koramangala (5.0 km)", p: [12.9716, 77.5946], d: [12.9352, 77.6245], pa: "MG Road, Bangalore", da: "Koramangala, Bangalore" },
+    { label: "MG Road → Indiranagar (3.4 km)", p: [12.9716, 77.5946], d: [12.9784, 77.6408], pa: "MG Road, Bangalore", da: "Indiranagar, Bangalore" },
+    { label: "MG Road → Airport (30 km, tiered)", p: [12.9716, 77.5946], d: [13.1986, 77.7066], pa: "MG Road, Bangalore", da: "Kempegowda Airport" },
+    { label: "Delhi: CP → Gurgaon (25 km, DELHI zone)", p: [28.6315, 77.2167], d: [28.4595, 77.0266], pa: "Connaught Place", da: "Gurgaon" },
+    { label: "Pune: Shivajinagar → Hinjewadi (17 km, PUNE zone)", p: [18.5308, 73.8470], d: [18.5913, 73.7389], pa: "Shivajinagar", da: "Hinjewadi" },
+  ];
+  RH.$("tripPreset").innerHTML = TRIPS.map((t, i) => `<option value="${i}">${RH.esc(t.label)}</option>`).join("");
+  RH.$("tripPreset").onchange = () => {
+    const t = TRIPS[+RH.$("tripPreset").value];
+    RH.$("pickLat").value = t.p[0]; RH.$("pickLng").value = t.p[1]; RH.$("pickAddr").value = t.pa;
+    RH.$("dropLat").value = t.d[0]; RH.$("dropLng").value = t.d[1]; RH.$("dropAddr").value = t.da;
+  };
+
+  // A live ride outranks a finished one; the API pages by recency, so this reorders the page only.
+  const ACTION_ORDER = { STARTED: 0, DRIVER_ASSIGNED: 1, REQUESTED: 2, COMPLETED: 3, CANCELLED: 4 };
+  function actionableFirst(items) {
+    return items.slice().sort((a, b) => {
+      const rank = (ACTION_ORDER[a.status] ?? 9) - (ACTION_ORDER[b.status] ?? 9);
+      return rank !== 0 ? rank : String(b.requestedAt || "").localeCompare(String(a.requestedAt || ""));
+    });
+  }
+
+  async function loadHistory() {
+    RH.banner("histBanner", "");
+    if (!ME) return RH.banner("histBanner", "The token carries no subject claim, so this page cannot tell which user it is.");
+    const res = await RH.api("/users/" + encodeURIComponent(ME) + "/rides?page=" + page + "&size=10");
+    pages = Math.max(res.totalPages, 1);
+    RH.$("pageInfo").textContent = `page ${res.page + 1} of ${pages} · ${res.totalElements} rides`;
+    RH.$("histRows").innerHTML = actionableFirst(res.items || []).map(r =>
+      `<tr>
+         <td class="mono">${RH.esc(r.id)}</td>
+         <td>${statusPill(r.status)}</td>
+         <td>${RH.esc(r.requestedCarType || "—")}${r.assignedCarType && r.assignedCarType !== r.requestedCarType ? " → " + RH.esc(r.assignedCarType) : ""}</td>
+         <td>${RH.fmt(r.distanceKm)}</td>
+         <td>${RH.fmt(r.fare && r.fare.totalFare)}</td>
+         <td class="muted">${RH.esc(RH.when(r.requestedAt))}</td>
+         <td><button class="sm" data-open="${RH.esc(r.id)}">Open</button> <button class="sm" data-pay="${RH.esc(r.id)}">Payments</button></td>
+       </tr>`).join("") || `<tr><td colspan="7" class="muted">No rides yet.</td></tr>`;
+
+    document.querySelectorAll("[data-open]").forEach(b => b.onclick = () => guard(async () => {
+      RH.$("rideId").value = b.dataset.open;
+      try { await doRefresh(); } catch (e) { RH.banner("rideBanner", e.message + hint(e)); }
+    }));
+    document.querySelectorAll("[data-pay]").forEach(b => b.onclick = () => guard(() => loadPayments(b.dataset.pay)));
+  }
+
+  async function loadPayments(id) {
+    try {
+      const list = await RH.api("/rides/" + encodeURIComponent(id) + "/payment");
+      RH.$("payBox").innerHTML = `<div class="muted" style="font-size:12px; margin-bottom:6px">Payments for ride <span class="mono">#${RH.esc(id)}</span></div>` +
+        (list && list.length
+          ? `<div class="scroll"><table><thead><tr><th>Id</th><th>Purpose</th><th>Method</th><th>Status</th><th>Amount</th><th>Reference</th><th>Collected</th></tr></thead><tbody>` +
+            list.map(p => `<tr><td class="mono">${RH.esc(p.id)}</td><td>${RH.esc(p.purpose)}</td><td>${RH.esc(p.method || "—")}</td>
+              <td><span class="pill ${p.status === "SUCCESS" ? "ok" : "bad"}">${RH.esc(p.status)}</span></td>
+              <td>${RH.fmt(p.amount)}</td><td class="mono">${RH.esc(p.reference || "—")}${p.failureReason ? " · " + RH.esc(p.failureReason) : ""}</td>
+              <td class="muted">${RH.esc(RH.when(p.collectedAt))}</td></tr>`).join("") + `</tbody></table></div>`
+          : `<span class="muted">No payment rows — the fare is only collected at completion, and a cancellation fee only when one is charged.</span>`);
+    } catch (e) {
+      RH.banner("histBanner", e.message + hint(e));
+    }
+  }
+
+  RH.$("btnEstimate").onclick = () => guard(async () => {
+    try { await doEstimate(); } catch (e) { RH.banner("estBanner", e.message + hint(e)); }
+  });
+
+  RH.$("btnNewKey").onclick = () => { RH.$("idemKey").value = newKey(); RH.banner("tripBanner", "New idempotency key generated.", "info"); };
+
+  // The key that was actually sent, so Replay can reuse it after Book has rolled the field forward.
+  let lastUsedKey = null;
+
+  RH.$("btnBook").onclick = () => guard(async () => {
+    try {
+      const key = str("idemKey") || newKey();
+      const r = await doBook(key);
+      lastUsedKey = key;
+      // A used key belongs to that ride for a day, so leaving it in the field would replay it on the next booking.
+      RH.$("idemKey").value = newKey();
+      RH.banner("tripBanner", "Booked ride #" + r.id + " — driver " + (r.driver ? r.driver.fullName : "pending")
+        + ". A fresh key is ready; press Replay to re-send the one this ride was booked with.", "ok");
+    } catch (e) { RH.banner("tripBanner", e.message + hint(e)); }
+  });
+
+  RH.$("btnReplay").onclick = () => guard(async () => {
+    if (!lastUsedKey) return RH.banner("tripBanner", "Book a ride first — there is no key to replay yet.", "info");
+    try {
+      const r = await doBook(lastUsedKey);
+      RH.banner("tripBanner", "Replayed key " + lastUsedKey + " and got ride #" + r.id
+        + " back — no second ride was created.", "ok");
+    } catch (e) { RH.banner("tripBanner", e.message + hint(e)); }
+  });
+
+  RH.$("btnRefresh").onclick = () => guard(async () => {
+    try { await doRefresh(); } catch (e) { RH.banner("rideBanner", e.message + hint(e)); }
+  });
+
+  RH.$("btnCancel").onclick = () => guard(async () => {
+    const id = str("rideId");
+    if (!id) return RH.banner("rideBanner", "No ride id to cancel.");
+    try {
+      const r = await RH.api("/rides/" + encodeURIComponent(id) + "/cancel", { method: "POST", body: { reason: str("cancelReason") } });
+      render(r);
+      RH.banner("rideBanner", Number(r.cancellationFee) > 0
+        ? "Cancelled — a fee of " + RH.fmt(r.cancellationFee) + " applies because a driver was already held past the grace window."
+        : "Cancelled with no fee.", "ok");
+    } catch (e) { RH.banner("rideBanner", e.message + hint(e)); }
+  });
+
+  RH.$("btnHistory").onclick = () => guard(async () => {
+    page = 0;
+    try { await loadHistory(); } catch (e) { RH.banner("histBanner", e.message + hint(e)); }
+  });
+
+  RH.$("btnPrev").onclick = () => guard(async () => {
+    if (page === 0) return;
+    page--;
+    try { await loadHistory(); } catch (e) { RH.banner("histBanner", e.message + hint(e)); }
+  });
+
+  RH.$("btnNext").onclick = () => guard(async () => {
+    if (page + 1 >= pages) return;
+    page++;
+    try { await loadHistory(); } catch (e) { RH.banner("histBanner", e.message + hint(e)); }
+  });
+
+  RH.$("btnDemo").onclick = () => guard(async () => {
+    const out = RH.$("demoOut");
+    const lines = [];
+    const say = (s) => { lines.push(new Date().toLocaleTimeString() + "  " + s); out.textContent = lines.join("\n"); };
+    out.textContent = "";
+    try {
+      say("1/3 POST /pricing/quote — pricing the trip, nothing reserved…");
+      const est = await doEstimate();
+      say("     " + RH.fmt(est.distanceKm) + " km · zone " + (est.pricingZoneCode || "—") + " · total " + RH.fmt(est.totalFare));
+
+      const key = newKey();
+      RH.$("idemKey").value = key;
+      say("2/3 POST /rides with Idempotency-Key " + key + " …");
+      const r = await doBook(key);
+      say("     ride #" + r.id + " " + r.status + " · " + r.requestedCarType + " → " + (r.assignedCarType || "—") +
+          (r.driver ? " · driver " + r.driver.fullName : " · no driver yet"));
+
+      say("3/3 GET /rides/" + r.id + " — re-reading the ride…");
+      const again = await doRefresh();
+      say("     " + again.status + " · pickup " + RH.fmt(again.driverPickupDistanceKm) + " km straight-line · ETA " +
+          (again.estimatedPickupEtaMinutes == null ? "—" : again.estimatedPickupEtaMinutes + " min"));
+      say("Done. Press Replay same key to prove the booking is idempotent.");
+    } catch (e) {
+      say("FAILED " + e.code + ": " + e.message + hint(e));
+    }
+  });
+
+  guard(async () => { try { await loadHistory(); } catch (e) { RH.banner("histBanner", e.message + hint(e)); } });
+}
+</script>
+</body>
+</html>
